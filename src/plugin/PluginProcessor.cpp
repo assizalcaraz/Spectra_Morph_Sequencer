@@ -24,7 +24,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout create_params() {
 
     add_float(ParamID::CoherenceChaos, "Coherence ↔ Chaos", 0.0f, 1.0f, 0.2f);
     add_float(ParamID::Density,        "Density",            0.0f, 1.0f, 0.5f);
-    add_float(ParamID::TonalResidual,  "Tonal / Residual",   0.0f, 1.0f, 0.7f);
+    add_float(ParamID::TonalResidual, "Tonal / Residual",   0.0f, 1.0f, 0.3f);
     add_float(ParamID::Gravity,        "Gravity",            0.0f, 10.0f, 1.0f);
     add_float(ParamID::Motion,         "Motion",             0.0f, 1.0f, 0.3f);
     add_float(ParamID::Decay,          "Decay",              0.0f, 1.0f, 0.5f);
@@ -267,7 +267,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const auto* snap = snapshots_.read();
         if (snap && snap->num_partials > 0) {
             resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_,
-                            tonal_residual_.load(), spread_.load());
+                            1.0f - tonal_residual_.load(), spread_.load());
             const float* out = resynth_.output_buffer();
             for (uint32_t i = 0; i < hop_size_; ++i)
                 output_ring_.write(out[i]);
