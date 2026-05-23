@@ -8,8 +8,7 @@
 #include <cstring>
 #include <numbers>
 
-// SPECS_07 — Hybrid resynthesis
-// Phase I: additive oscillator bank (tonal)
+// SPECS_07 — Hybrid resynthesis (tonal partials + optional residual)
 
 class Resynthesizer {
 public:
@@ -21,13 +20,16 @@ public:
     }
 
     void render(const ParticleSnapshot& snap, float sample_rate,
-                uint32_t hop_size, float tonal_gain = 1.0f,
-                float spread = 0.0f)
+                uint32_t hop_size, float tonal_gain, float spread,
+                float coherence, const float* input_hop,
+                const float* mag, uint32_t half_n, uint32_t fft_size)
     {
         sample_rate_ = sample_rate;
         hop_size_    = hop_size;
         tonal_gain_  = tonal_gain;
-        spread_      = spread;
+        spread_      = spread * (1.0f - coherence);
+        coherence_   = coherence;
+        fft_size_    = fft_size;
 
         add_buf_.from_snapshot(snap, sample_rate_);
         std::memset(output_buf_, 0, hop_size_ * sizeof(float));
@@ -35,24 +37,21 @@ public:
         if (add_buf_.num_active > 0)
             render_additive(hop_size_);
 
-        // Residual noise layer — fills the gap when tonal_gain is low
-        float noise_gain = (1.0f - tonal_gain_) * 0.06f;
-        if (noise_gain > 0.001f) {
-            for (uint32_t i = 0; i < hop_size_; ++i) {
-                noise_seed_ = noise_seed_ * 1664525u + 1013904223u;
-                float n = (static_cast<float>(noise_seed_ & 0x7FFF)
-                         / 16384.0f - 1.0f);
-                output_buf_[i] += n * noise_gain;
-            }
+        // Spectral residual: fill energy not captured by partials
+        if (input_hop != nullptr && mag != nullptr && half_n > 0) {
+            const float residual_gain = (1.0f - tonal_gain) * (0.15f + coherence * 0.55f);
+            if (residual_gain > 0.01f)
+                add_spectral_residual(input_hop, mag, half_n, residual_gain);
         }
 
-        // Crossfade with previous frame (Hann-like)
+        // Frame crossfade — lighter at high coherence (sharper spectrum)
         const float pi = std::numbers::pi_v<float>;
+        const float xfade_strength = 0.25f + (1.0f - coherence) * 0.75f;
         for (uint32_t i = 0; i < hop_size_; ++i) {
-            float fade_in  = 0.5f * (1.0f - std::cos(pi * i / hop_size_));
+            float fade_in  = 0.5f * (1.0f - std::cos(pi * static_cast<float>(i) / hop_size_));
             float fade_out = 1.0f - fade_in;
-            output_buf_[i] = output_buf_[i] * fade_in
-                           + prev_output_[i] * fade_out;
+            output_buf_[i] = output_buf_[i] * (fade_in * (1.0f - xfade_strength) + xfade_strength)
+                           + prev_output_[i] * (fade_out * (1.0f - xfade_strength));
         }
 
         std::memcpy(prev_output_, output_buf_, hop_size_ * sizeof(float));
@@ -63,19 +62,21 @@ public:
 private:
     void render_additive(uint32_t hop_size) {
         const float two_pi = 2.0f * std::numbers::pi_v<float>;
-        float nyquist = sample_rate_ * 0.45f;
+        const float nyquist = sample_rate_ * 0.45f;
+        // Hann-windowed FFT peak → sinusoid amplitude correction
+        const float amp_scale = tonal_gain_ * 4.0f / static_cast<float>(fft_size_);
 
         for (uint32_t i = 0; i < add_buf_.num_active; ++i) {
-            float detune = 1.0f + spread_ * static_cast<float>((static_cast<int>(i) % 7) - 3) * 0.05f;
-            float freq = add_buf_.freq[i] * detune;
-            float amp  = add_buf_.amp[i];
-            float& ph  = add_buf_.phase[i];
-            float env  = add_buf_.env[i];
+            const float detune = 1.0f + spread_ * static_cast<float>((static_cast<int>(i) % 7) - 3) * 0.015f;
+            const float freq = add_buf_.freq[i] * detune;
+            const float amp  = add_buf_.amp[i] * amp_scale;
+            float& ph        = add_buf_.phase[i];
+            const float env  = add_buf_.env[i];
 
             if (amp < 0.0001f || env < 0.001f || freq > nyquist)
                 continue;
 
-            float phase_inc = two_pi * freq / sample_rate_;
+            const float phase_inc = two_pi * freq / sample_rate_;
 
             for (uint32_t s = 0; s < hop_size; ++s) {
                 output_buf_[s] += amp * env * std::sin(ph);
@@ -83,21 +84,26 @@ private:
                 if (ph > two_pi) ph -= two_pi;
             }
         }
+    }
 
-        if (add_buf_.num_active > 0) {
-            float scale = tonal_gain_ / static_cast<float>(add_buf_.num_active);
-            for (uint32_t i = 0; i < hop_size; ++i)
-                output_buf_[i] *= scale;
+    // Time-domain residual from input minus synthesis (OLA-friendly)
+    void add_spectral_residual(const float* input_hop, const float* /*mag*/,
+                               uint32_t /*half_n*/, float gain)
+    {
+        for (uint32_t i = 0; i < hop_size_; ++i) {
+            const float diff = input_hop[i] - output_buf_[i];
+            output_buf_[i] += diff * gain;
         }
     }
 
     float    sample_rate_ = 48000.0f;
     uint32_t hop_size_    = 512;
+    uint32_t fft_size_    = 2048;
     float    tonal_gain_  = 1.0f;
     float    spread_      = 0.0f;
+    float    coherence_   = 0.8f;
 
     AdditiveBuffer add_buf_;
-    uint32_t noise_seed_ = 12345;
     float output_buf_[RING_BUFFER_SIZE]  = {};
     float prev_output_[RING_BUFFER_SIZE] = {};
 };

@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "../dsp/tracking/PeakUtils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -117,36 +118,47 @@ void SpectraMorphAudioProcessor::syncParamsFromApvts() {
 }
 
 void SpectraMorphAudioProcessor::applyParticleEffects() {
-    const float decay   = decay_.load();
-    const float gravity = gravity_.load();
-    const float motion  = motion_.load();
-    const float chaos   = coherence_chaos_.load();
-    const float density = density_.load();
+    // Knob left (0) = coherence, right (1) = chaos
+    const float coherence = 1.0f - coherence_chaos_.load();
+    const float decay     = decay_.load();
+    const float density   = density_.load();
 
-    const float energy_decay = 1.0f - decay * 0.08f;
-    const float amp_decay    = 1.0f - decay * 0.04f;
+    // High coherence: preserve spectrum, skip ecological drift
+    if (coherence < 0.85f) {
+        const float chaos   = 1.0f - coherence;
+        const float gravity = gravity_.load();
+        const float motion  = motion_.load();
+        const float energy_decay = 1.0f - decay * 0.08f;
+        const float amp_decay    = 1.0f - decay * 0.04f;
 
-    for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
-        if (!pool_.is_alive(i)) continue;
+        for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
+            if (!pool_.is_alive(i)) continue;
 
-        auto& p = pool_[i];
-        p.energy    *= energy_decay;
-        p.amplitude *= amp_decay;
+            auto& p = pool_[i];
+            p.energy    *= energy_decay;
+            p.amplitude *= amp_decay;
 
-        const float pull = (5.0f - p.spectral_pos) * gravity * 0.01f;
-        p.velocity += (chaos - 0.5f) * motion * 0.2f;
-        p.velocity  = std::clamp(p.velocity, -2.0f, 2.0f);
-        p.spectral_pos += pull + p.velocity * motion * 0.1f;
-        p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
-        p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
+            const float pull = (5.0f - p.spectral_pos) * gravity * 0.01f;
+            p.velocity += (chaos - 0.5f) * motion * 0.2f;
+            p.velocity  = std::clamp(p.velocity, -2.0f, 2.0f);
+            p.spectral_pos += pull + p.velocity * motion * 0.1f;
+            p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
+            p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
 
-        p.coherence *= 1.0f - chaos * 0.03f;
-        if (p.coherence < 0.05f) p.coherence = 0.05f;
+            p.coherence *= 1.0f - chaos * 0.03f;
+            if (p.coherence < 0.05f) p.coherence = 0.05f;
+        }
+    } else if (decay > 0.01f) {
+        const float amp_decay = 1.0f - decay * 0.02f;
+        for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
+            if (!pool_.is_alive(i)) continue;
+            pool_[i].amplitude *= amp_decay;
+            pool_[i].energy *= 1.0f - decay * 0.03f;
+        }
     }
 
-    // Density-based pool pruning: cull weakest partials
     const uint32_t density_target = 8u + static_cast<uint32_t>(
-        density * static_cast<float>(MAX_PARTIALS));
+        density * static_cast<float>(MAX_PARTIALS - 8));
     pool_.prune_to(density_target);
 }
 
@@ -212,11 +224,16 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         // 1. FFT
         fft_.process(input_block.data());
 
-        // 2. Peak detection
+        // 2. Peak detection (sub-bin refinement)
         Peak peaks[MAX_PEAKS];
         uint32_t num_peaks = 0;
         uint32_t half_n = fft_.half_n();
+        const float coherence = 1.0f - coherence_chaos_.load();
+        const float density_val = density_.load();
+        const float sr = static_cast<float>(sample_rate_);
+
         float threshold = fft_.noise_floor() * birth_threshold_.load() + 0.001f;
+        threshold *= 1.0f - coherence * 0.7f;
 
         const float* mag   = fft_.magnitude();
         const float* phase = fft_.phase();
@@ -225,26 +242,35 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             if (mag[i] > mag[i - 1] && mag[i] > mag[i + 1] && mag[i] > threshold) {
                 auto& p = peaks[num_peaks++];
                 p.bin_index = static_cast<uint16_t>(i);
-                p.frequency = fft_.bin_freq(i);
+                p.frequency = PeakUtils::refine_frequency(
+                    i, mag, sr, fft_size_);
                 p.magnitude = mag[i];
                 p.phase     = phase[i];
             }
         }
 
-        // Density: keep only the strongest peaks
-        const float density_val = density_.load();
+        if (num_peaks > 0) {
+            const float f0 = PeakUtils::estimate_fundamental(peaks, num_peaks);
+            PeakUtils::enrich_harmonics(
+                peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
+                threshold, coherence, MAX_PEAKS);
+        }
+
         if (num_peaks > 1) {
             std::sort(peaks, peaks + num_peaks,
                 [](const Peak& a, const Peak& b) {
                     return a.magnitude > b.magnitude;
                 });
-            const uint32_t peak_cap = static_cast<uint32_t>(4.0f + density_val * 120.0f);
-            num_peaks = std::min(num_peaks, std::max(4u, peak_cap));
+            const float cap_lo = 4.0f + density_val * 80.0f;
+            const float cap_hi = 24.0f + density_val * 200.0f;
+            const uint32_t peak_cap = static_cast<uint32_t>(
+                cap_lo + coherence * (cap_hi - cap_lo));
+            num_peaks = std::min(num_peaks, std::max(8u, peak_cap));
         }
 
         // 4. Partial tracking (cadenced)
         ++frame_counter_;
-        tracker_.set_coherence_chaos(coherence_chaos_.load());
+        tracker_.set_coherence(coherence);
         if (scheduler_.tick(frame_counter_)) {
             tracker_.track(peaks, num_peaks, pool_, frame_counter_);
             applyParticleEffects();
@@ -266,8 +292,10 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         // 6. Resynthesis
         const auto* snap = snapshots_.read();
         if (snap && snap->num_partials > 0) {
+            const float tonal = 1.0f - tonal_residual_.load();
             resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_,
-                            1.0f - tonal_residual_.load(), spread_.load());
+                            tonal, spread_.load(), coherence,
+                            input_block.data(), mag, half_n, fft_size_);
             const float* out = resynth_.output_buffer();
             for (uint32_t i = 0; i < hop_size_; ++i)
                 output_ring_.write(out[i]);

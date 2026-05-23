@@ -135,7 +135,13 @@ public:
     uint32_t births() const { return births_; }
     uint32_t deaths() const { return deaths_; }
 
-    void set_coherence_chaos(float v) { coherence_chaos_ = v; }
+    // coherence 0 = chaos, 1 = maximum fidelity / stable tracking
+    void set_coherence(float coherence) {
+        coherence_ = std::clamp(coherence, 0.0f, 1.0f);
+        max_hold_frames_ = 3u + static_cast<uint32_t>(coherence_ * 10.0f);
+        max_freq_deviation_ = (0.35f + (1.0f - coherence_) * 0.15f)
+                            * (sample_rate_ / static_cast<float>(fft_size_));
+    }
 
 private:
     void update_partial(Partial& p, const Peak& peak, bool was_continuous) {
@@ -150,13 +156,13 @@ private:
         float inst_freq = p.frequency
                         + delta * sample_rate_ / (two_pi * hop_size_);
 
-        // Smooth updates — chaos reduces tracking smoothness
-        float chaos = coherence_chaos_;
-        float smooth = was_continuous
-            ? (0.15f + chaos * 0.55f)
-            : (0.35f + chaos * 0.55f);
+        // High coherence → follow peaks closely; chaos → sluggish / smeared
+        const float chaos = 1.0f - coherence_;
+        const float smooth = was_continuous
+            ? (0.05f + chaos * 0.65f)
+            : (0.12f + chaos * 0.68f);
         p.frequency    = p.frequency * (1.0f - smooth) + inst_freq * smooth;
-        p.amplitude    = peak.magnitude;
+        p.amplitude    = p.amplitude * (smooth * 0.25f) + peak.magnitude * (1.0f - smooth * 0.25f);
         p.phase        = peak.phase;
         p.energy       = peak.magnitude * peak.magnitude;
         p.coherence    = 1.0f - std::abs(delta) / std::numbers::pi_v<float>;
@@ -171,5 +177,5 @@ private:
 
     uint32_t births_ = 0;
     uint32_t deaths_ = 0;
-    float    coherence_chaos_ = 0.2f;
+    float    coherence_ = 0.8f;
 };

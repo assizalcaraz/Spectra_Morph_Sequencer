@@ -22,7 +22,7 @@ SpectraMorphAudioProcessorEditor::SpectraMorphAudioProcessorEditor(
     , dry_wet_attach_(
           p.get_apvts(), ParamID::DryWet, dry_wet_.slider)
 {
-    setSize(800, 550);
+    setSize(800, 560);
     startTimerHz(30);
 
     auto add = [&](SliderWithLabel& s, const juce::String& name) {
@@ -64,7 +64,7 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
 
     auto bounds = getLocalBounds().reduced(12);
     bounds.removeFromBottom(120);  // slider strip reserved in resized()
-    auto telemetry = bounds.removeFromTop(28).reduced(4, 6);
+    auto telemetry = bounds.removeFromTop(36).reduced(8, 10);
     auto viz_area = bounds.reduced(0, 4).toFloat();
 
     VisualState vs;
