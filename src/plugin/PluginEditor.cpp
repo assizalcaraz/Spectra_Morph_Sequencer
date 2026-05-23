@@ -6,47 +6,37 @@ SpectraMorphAudioProcessorEditor::SpectraMorphAudioProcessorEditor(
     : AudioProcessorEditor(&p)
     , processor_(p)
     , coherence_attach_(
-          p.get_apvts(), ParamID::CoherenceChaos, coherence_slider_)
+          p.get_apvts(), ParamID::CoherenceChaos, coherence_.slider)
     , density_attach_(
-          p.get_apvts(), ParamID::Density, density_slider_)
+          p.get_apvts(), ParamID::Density, density_.slider)
     , tonal_residual_attach_(
-          p.get_apvts(), ParamID::TonalResidual, tonal_residual_slider_)
+          p.get_apvts(), ParamID::TonalResidual, tonal_residual_.slider)
     , gravity_attach_(
-          p.get_apvts(), ParamID::Gravity, gravity_slider_)
+          p.get_apvts(), ParamID::Gravity, gravity_.slider)
     , motion_attach_(
-          p.get_apvts(), ParamID::Motion, motion_slider_)
+          p.get_apvts(), ParamID::Motion, motion_.slider)
     , decay_attach_(
-          p.get_apvts(), ParamID::Decay, decay_slider_)
+          p.get_apvts(), ParamID::Decay, decay_.slider)
     , spread_attach_(
-          p.get_apvts(), ParamID::Spread, spread_slider_)
+          p.get_apvts(), ParamID::Spread, spread_.slider)
     , dry_wet_attach_(
-          p.get_apvts(), ParamID::DryWet, dry_wet_slider_)
+          p.get_apvts(), ParamID::DryWet, dry_wet_.slider)
 {
-    setSize(800, 500);
+    setSize(800, 550);
     startTimerHz(30);
 
-    auto setup_slider = [](juce::Slider& s) {
-        s.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 20);
+    auto add = [&](SliderWithLabel& s, const juce::String& name) {
+        s.setup(name);
+        addAndMakeVisible(s.slider);
     };
-
-    setup_slider(coherence_slider_);
-    setup_slider(density_slider_);
-    setup_slider(tonal_residual_slider_);
-    setup_slider(gravity_slider_);
-    setup_slider(motion_slider_);
-    setup_slider(decay_slider_);
-    setup_slider(spread_slider_);
-    setup_slider(dry_wet_slider_);
-
-    addAndMakeVisible(coherence_slider_);
-    addAndMakeVisible(density_slider_);
-    addAndMakeVisible(tonal_residual_slider_);
-    addAndMakeVisible(gravity_slider_);
-    addAndMakeVisible(motion_slider_);
-    addAndMakeVisible(decay_slider_);
-    addAndMakeVisible(spread_slider_);
-    addAndMakeVisible(dry_wet_slider_);
+    add(coherence_,      "Coherence↔Chaos");
+    add(density_,        "Density");
+    add(tonal_residual_, "Tonal/Residual");
+    add(gravity_,        "Gravity");
+    add(motion_,         "Motion");
+    add(decay_,          "Decay");
+    add(spread_,         "Spread");
+    add(dry_wet_,        "Dry/Wet");
 }
 
 SpectraMorphAudioProcessorEditor::~SpectraMorphAudioProcessorEditor() {
@@ -54,56 +44,74 @@ SpectraMorphAudioProcessorEditor::~SpectraMorphAudioProcessorEditor() {
 }
 
 void SpectraMorphAudioProcessorEditor::resized() {
-    auto area = getLocalBounds().reduced(20);
-    int w = area.getWidth() / 8;
+    auto area = getLocalBounds().reduced(10);
+    auto slider_area = area.removeFromBottom(120).reduced(5, 0);
+    int sw = slider_area.getWidth() / 8;
 
-    coherence_slider_.setBounds(area.removeFromLeft(w));
-    density_slider_.setBounds(area.removeFromLeft(w));
-    tonal_residual_slider_.setBounds(area.removeFromLeft(w));
-    gravity_slider_.setBounds(area.removeFromLeft(w));
-    motion_slider_.setBounds(area.removeFromLeft(w));
-    decay_slider_.setBounds(area.removeFromLeft(w));
-    spread_slider_.setBounds(area.removeFromLeft(w));
-    dry_wet_slider_.setBounds(area.removeFromLeft(w));
+    coherence_.slider.setBounds(slider_area.removeFromLeft(sw));
+    density_.slider.setBounds(slider_area.removeFromLeft(sw));
+    tonal_residual_.slider.setBounds(slider_area.removeFromLeft(sw));
+    gravity_.slider.setBounds(slider_area.removeFromLeft(sw));
+    motion_.slider.setBounds(slider_area.removeFromLeft(sw));
+    decay_.slider.setBounds(slider_area.removeFromLeft(sw));
+    spread_.slider.setBounds(slider_area.removeFromLeft(sw));
+    dry_wet_.slider.setBounds(slider_area.removeFromLeft(sw));
 }
 
 void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
     g.fillAll(getLookAndFeel().findColour(
         juce::ResizableWindow::backgroundColourId));
 
-    g.setColour(juce::Colours::white);
-    g.setFont(14.0f);
+    auto area = getLocalBounds().toFloat().reduced(10, 10);
+    auto viz_area = area.withBottom(area.getBottom() - 140);
 
-    // Draw particle visualization
     VisualState vs;
-    if (processor_.read_visual(vs) && vs.num_partials > 0) {
-        auto area = getLocalBounds().toFloat().reduced(10, 100);
-        float h = area.getHeight();
-        float w = area.getWidth();
+    bool has_data = processor_.read_visual(vs);
+
+    if (has_data && vs.num_partials > 0) {
+        // Draw particles
+        float h = viz_area.getHeight();
+        float w = viz_area.getWidth();
+        float cx = viz_area.getCentreX();
+        float cy = viz_area.getCentreY();
 
         for (uint32_t i = 0; i < vs.num_partials; ++i) {
             auto& p = vs.partials[i];
             if (p.amplitude < 0.01f) continue;
 
-            float x = area.getX() + (p.spectral_pos / LOG_OCTAVES) * w;
-            float y = area.getY() + h * 0.5f;
-            float r = 2.0f + p.amplitude * 4.0f;
-
-            // Color by harmonic affinity
-            float hue = 0.6f - p.harmonic_affinity * 0.5f;  // blue → green
+            float x = viz_area.getX() + (p.spectral_pos / LOG_OCTAVES) * w;
+            float y = cy + (p.frequency / 5000.0f - 0.5f) * h * 0.6f;
+            float r = 2.0f + p.amplitude * 6.0f;
+            float hue = 0.6f - p.harmonic_affinity * 0.5f;
             float alpha = p.coherence * 0.8f + 0.2f;
 
             g.setColour(juce::Colour::fromHSV(hue, 0.8f, 0.8f, alpha));
             g.fillEllipse(x - r, y - r, r * 2, r * 2);
         }
 
-        // Telemetry text
+        // Telemetry
         g.setColour(juce::Colours::grey);
         g.drawText("Partials: " + juce::String(vs.num_partials)
+            + "  Births: " + juce::String(vs.births_this_frame)
+            + "  Deaths: " + juce::String(vs.deaths_this_frame)
             + "  Coherence: " + juce::String(vs.global_coherence, 2)
             + "  CPU: " + juce::String(vs.cpu_load * 100.0f, 1) + "%",
-            10, getHeight() - 30, getWidth() - 20, 20,
+            viz_area.getX(), viz_area.getY() - 20,
+            viz_area.getWidth(), 20,
             juce::Justification::centredLeft);
+    } else {
+        // No data — show idle message
+        g.setColour(juce::Colours::darkgrey);
+        g.setFont(18.0f);
+        g.drawText("SpectraMorph — insert effect: processa el audio del track en tiempo real",
+            viz_area.toNearestInt(),
+            juce::Justification::centred);
+
+        g.setFont(14.0f);
+        g.drawText("Ajusta los parámetros para esculpir la materia espectral",
+            viz_area.getX(), viz_area.getCentreY() + 30,
+            viz_area.getWidth(), 20,
+            juce::Justification::centred);
     }
 }
 

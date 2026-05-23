@@ -20,15 +20,27 @@ public:
 private:
     SpectraMorphAudioProcessor& processor_;
 
-    // Sliders for macro controls
-    juce::Slider coherence_slider_;
-    juce::Slider density_slider_;
-    juce::Slider tonal_residual_slider_;
-    juce::Slider gravity_slider_;
-    juce::Slider motion_slider_;
-    juce::Slider decay_slider_;
-    juce::Slider spread_slider_;
-    juce::Slider dry_wet_slider_;
+    struct SliderWithLabel {
+        juce::Slider slider;
+        juce::Label  label;
+        void setup(const juce::String& name) {
+            slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+            slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 18);
+            label.setText(name, juce::dontSendNotification);
+            label.setJustificationType(juce::Justification::centred);
+            label.attachToComponent(&slider, false);
+            label.setFont(12.0f);
+        }
+    };
+
+    SliderWithLabel coherence_;
+    SliderWithLabel density_;
+    SliderWithLabel tonal_residual_;
+    SliderWithLabel gravity_;
+    SliderWithLabel motion_;
+    SliderWithLabel decay_;
+    SliderWithLabel spread_;
+    SliderWithLabel dry_wet_;
 
     juce::AudioProcessorValueTreeState::SliderAttachment coherence_attach_;
     juce::AudioProcessorValueTreeState::SliderAttachment density_attach_;

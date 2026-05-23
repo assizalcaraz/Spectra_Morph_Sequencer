@@ -47,6 +47,9 @@ SpectraMorphAudioProcessor::~SpectraMorphAudioProcessor() {
 }
 
 void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize) {
+    // Ensure any previous session is torn down before re-initializing
+    releaseResources();
+
     sample_rate_ = sampleRate;
     block_size_  = static_cast<uint32_t>(blockSize);
     fft_size_    = 2048;
@@ -95,35 +98,26 @@ void SpectraMorphAudioProcessor::processBlock(
     juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    int num_samples = buffer.getNumSamples();
-    int num_channels = buffer.getNumChannels();
+    int ns = buffer.getNumSamples();
+    int nc = buffer.getNumChannels();
+    float mix = dry_wet_.load();
 
-    // Read input and write to ring buffer
-    for (int ch = 0; ch < num_channels; ++ch) {
-        auto* in = buffer.getReadPointer(ch);
-        for (int i = 0; i < num_samples; ++i) {
-            input_ring_.write(in[i]);
-        }
+    // Sum input to mono (safe: no allocation in audio thread)
+    for (int i = 0; i < ns; ++i) {
+        float s = 0.0f;
+        for (int ch = 0; ch < nc; ++ch)
+            s += buffer.getReadPointer(ch)[i];
+        input_ring_.write(s / static_cast<float>(nc));
     }
 
-    // Read output from ring buffer and mix with dry
-    if (num_channels > 0) {
-        auto* out_l = buffer.getWritePointer(0);
-        auto* in_l  = buffer.getReadPointer(0);
-        float mix = dry_wet_.load();
-
-        for (int i = 0; i < num_samples; ++i) {
-            float wet = 0.0f;
-            output_ring_.read(wet);
-            out_l[i] = in_l[i] * (1.0f - mix) + wet * mix;
-        }
-
-        // Copy to other channels
-        for (int ch = 1; ch < num_channels; ++ch) {
+    // Read mono wet output once per sample, apply to all channels
+    for (int i = 0; i < ns; ++i) {
+        float wet = 0.0f;
+        output_ring_.read(wet);
+        for (int ch = 0; ch < nc; ++ch) {
             auto* out = buffer.getWritePointer(ch);
             auto* in  = buffer.getReadPointer(ch);
-            for (int i = 0; i < num_samples; ++i)
-                out[i] = in[i] * (1.0f - mix) + out_l[i] * mix;
+            out[i] = in[i] * (1.0f - mix) + wet * mix;
         }
     }
 }
