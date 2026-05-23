@@ -38,11 +38,14 @@ public:
 
     // Called every frame DSP (every H samples)
     // Returns true if tracking should run this frame
+    void set_audio_params(float sr, uint32_t hop) {
+        sample_rate_ = sr;
+        hop_size_ = hop;
+        last_deadline_ns_ = deadline_ns(hop_size_, sample_rate_);
+    }
+
     bool tick(uint32_t frame_counter) {
         frame_counter_ = frame_counter;
-
-        // Measure load via external timing (set before/after call)
-        update_pressure();
 
         // Decouple cadences
         bool run_tracking  = (frame_counter % deg_.tracking_interval == 0);
@@ -134,6 +137,16 @@ public:
         return 0;
     }
 
+    // ── CPU pressure detection ─────────────────────────────────────
+    void update_pressure() {
+        uint64_t dur  = frame_duration_ns();
+        uint64_t dl   = last_deadline_ns_;
+        if (dl == 0) return;
+
+        float load = static_cast<float>(dur) / static_cast<float>(dl);
+        update_pressure_with_hysteresis(load);
+    }
+
     // ── Frame skipping (SPECS_10 §8) ───────────────────────────────
     bool should_skip_simulation() const {
         return (deg_.pressure == PressureLevel::Critical)
@@ -181,15 +194,6 @@ public:
     }
 
 private:
-    void update_pressure() {
-        uint64_t dur  = frame_duration_ns();
-        uint64_t dl   = last_deadline_ns_;
-        if (dl == 0) return;
-
-        float load = static_cast<float>(dur) / static_cast<float>(dl);
-        update_pressure_with_hysteresis(load);
-    }
-
     static uint64_t now_ns() {
         return static_cast<uint64_t>(
             std::chrono::steady_clock::now().time_since_epoch().count());
@@ -202,6 +206,8 @@ private:
     uint64_t frame_start_ns_   = 0;
     uint64_t frame_end_ns_     = 0;
     uint64_t last_deadline_ns_ = 0;
+    float    sample_rate_      = 48000.0f;
+    uint32_t hop_size_         = 512;
 
     bool run_tracking_  = true;
     bool run_physics_   = true;

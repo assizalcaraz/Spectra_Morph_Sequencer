@@ -6,23 +6,28 @@ void test_scheduler() {
     printf("  scheduler: ");
 
     Scheduler sched;
+    sched.set_audio_params(48000.0f, 512);
     assert(sched.pressure() == PressureLevel::Nominal);
     assert(sched.max_partials() == MAX_PARTIALS);
     assert(sched.state().tracking_interval == 1);
 
-    // Hysteresis — need enough iterations for EMA to converge
-    // With alpha=0.1, load=0.8: EMA passes 0.75 after ~20 iterations
+    // Hysteresis — DSP thread pattern: begin_frame → work → end_frame → tick
+    // update_pressure_with_hysteresis simulates the load measurement
     for (int i = 0; i < 30; ++i) {
-        sched.update_pressure_with_hysteresis(0.8f);
+        sched.begin_frame();
+        sched.end_frame();
         sched.tick(static_cast<uint32_t>(i));
+        sched.update_pressure_with_hysteresis(0.8f);
     }
     assert(sched.pressure() == PressureLevel::Warming);
     assert(sched.max_partials() < MAX_PARTIALS);
 
     // Recovery
     for (int i = 0; i < 30; ++i) {
-        sched.update_pressure_with_hysteresis(0.1f);
+        sched.begin_frame();
+        sched.end_frame();
         sched.tick(static_cast<uint32_t>(i + 100));
+        sched.update_pressure_with_hysteresis(0.1f);
     }
     assert(sched.pressure() == PressureLevel::Nominal);
 

@@ -58,6 +58,8 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
     fft_size_    = 2048;
     hop_size_    = fft_size_ / 4;
 
+    scheduler_.set_audio_params(static_cast<float>(sample_rate_), hop_size_);
+
     // Init pipeline
     fft_.prepare(fft_size_, hop_size_, static_cast<float>(sample_rate_));
     tracker_.prepare(static_cast<float>(sample_rate_), fft_size_, hop_size_);
@@ -131,8 +133,6 @@ void SpectraMorphAudioProcessor::applyParticleEffects() {
         p.energy    *= energy_decay;
         p.amplitude *= amp_decay;
 
-        // Gravity: pull toward spectral center (pos 5 = 640 Hz)
-        // At gravity=10, a partial at 20Hz reaches 640Hz in ~1s
         const float pull = (5.0f - p.spectral_pos) * gravity * 0.01f;
         p.velocity += (chaos - 0.5f) * motion * 0.2f;
         p.velocity  = std::clamp(p.velocity, -2.0f, 2.0f);
@@ -140,11 +140,14 @@ void SpectraMorphAudioProcessor::applyParticleEffects() {
         p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
         p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
 
-        // Coherence decays faster with chaos
         p.coherence *= 1.0f - chaos * 0.03f;
         if (p.coherence < 0.05f) p.coherence = 0.05f;
     }
 
+    // Density-based pool pruning: cull weakest partials
+    const uint32_t density_target = 8u + static_cast<uint32_t>(
+        density * static_cast<float>(MAX_PARTIALS));
+    pool_.prune_to(density_target);
 }
 
 void SpectraMorphAudioProcessor::processBlock(
@@ -153,11 +156,16 @@ void SpectraMorphAudioProcessor::processBlock(
     juce::ScopedNoDenormals noDenormals;
     syncParamsFromApvts();
 
-    int ns = buffer.getNumSamples();
-    int nc = buffer.getNumChannels();
     float mix = dry_wet_.load();
 
-    // Sum input to mono (safe: no allocation in audio thread)
+    // True bypass: no processing, no ring I/O
+    if (mix < 0.005f)
+        return;
+
+    int ns = buffer.getNumSamples();
+    int nc = buffer.getNumChannels();
+
+    // Sum input to mono
     for (int i = 0; i < ns; ++i) {
         float s = 0.0f;
         for (int ch = 0; ch < nc; ++ch)
@@ -196,6 +204,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
 
         if (!got_data) {
             scheduler_.end_frame();
+            scheduler_.update_pressure();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
@@ -292,6 +301,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         scheduler_.end_frame();
+        scheduler_.update_pressure();
     }
 }
 
