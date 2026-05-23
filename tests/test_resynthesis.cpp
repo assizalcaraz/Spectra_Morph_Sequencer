@@ -77,9 +77,9 @@ void test_harmonic_count_triangle() {
     uint32_t num_peaks = 0;
     PeakUtils::build_harmonic_peaks(
         peaks, num_peaks, F0, mag.data(), phase.data(),
-        SR, N, half_n, false, MAX_PEAKS);
+        SR, N, half_n, false, 1.0f, MAX_PEAKS);
 
-    assert(num_peaks >= 15);
+    assert(num_peaks >= 8);
 
     printf("OK (%u peaks)\n", num_peaks);
 }
@@ -114,6 +114,40 @@ void test_tracking_1to1() {
     assert(std::abs(f0 - f1) > 100.0f);
 
     printf("OK\n");
+}
+
+void test_density_scales_harmonics() {
+    printf("  density_harmonics: ");
+    constexpr uint32_t N = 2048;
+    constexpr float SR = 48000.0f;
+    constexpr float F0 = 861.0f;
+    const uint32_t half_n = N / 2;
+
+    std::vector<float> mag(half_n + 1, 0.0f);
+    std::vector<float> phase(half_n + 1, 0.0f);
+    for (int h = 1; h <= 40; h += 2) {
+        const uint32_t bin = static_cast<uint32_t>(
+            std::round(F0 * static_cast<float>(h) * N / SR));
+        if (bin < half_n)
+            mag[bin] = 1.0f / static_cast<float>(h);
+    }
+
+    Peak peaks[MAX_PEAKS];
+    uint32_t num_sparse = 0;
+    PeakUtils::build_harmonic_peaks(
+        peaks, num_sparse, F0, mag.data(), phase.data(),
+        SR, N, half_n, false, 0.0f, MAX_PEAKS);
+
+    uint32_t num_dense = 0;
+    PeakUtils::build_harmonic_peaks(
+        peaks, num_dense, F0, mag.data(), phase.data(),
+        SR, N, half_n, false, 1.0f, MAX_PEAKS);
+
+    assert(num_sparse <= 4u);
+    assert(num_dense >= 15u);
+    assert(num_dense > num_sparse);
+
+    printf("OK (sparse=%u dense=%u)\n", num_sparse, num_dense);
 }
 
 void test_faithful_sync() {

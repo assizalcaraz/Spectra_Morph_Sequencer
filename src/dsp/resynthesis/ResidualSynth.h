@@ -43,14 +43,19 @@ public:
     }
 
     void subtract(const float* input_mag, const float* input_phase,
-                  float coherence, uint64_t& phase_seed)
+                  const float* raw_phase, float coherence,
+                  float transient_strength, uint64_t& phase_seed)
     {
+        const bool use_raw = transient_strength > 0.3f;
+
         for (uint32_t k = 0; k < half_n_; ++k) {
             residual_mag_[k] = input_mag[k] > tonal_mag_[k]
                 ? input_mag[k] - tonal_mag_[k]
                 : 0.0f;
 
-            if (coherence > 0.75f)
+            if (use_raw && raw_phase != nullptr)
+                residual_phase_[k] = raw_phase[k];
+            else if (coherence > 0.75f)
                 residual_phase_[k] = input_phase[k];
             else {
                 phase_seed = phase_seed * 1103515245ull + 12345ull;

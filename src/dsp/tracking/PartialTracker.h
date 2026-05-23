@@ -135,36 +135,18 @@ public:
         }
     }
 
+    // Faithful mode: 1:1 tracking without pool reset (preserves phase / particle state)
     void sync_faithful(const Peak* peaks, uint32_t num_peaks,
                        PartialPool& pool, uint32_t frame_counter)
     {
-        births_ = 0;
-        deaths_ = 0;
-        pool.clear();
-
-        for (uint32_t p_idx = 0; p_idx < num_peaks; ++p_idx) {
-            if (pool.full()) break;
-            const uint32_t id = pool.allocate();
-            if (id >= MAX_PARTIALS) break;
-
-            auto& p = pool[id];
-            const auto& peak = peaks[p_idx];
-            p.id                 = (frame_counter << 16) | id;
-            p.birth_frame        = frame_counter;
-            p.frequency          = peak.frequency;
-            p.amplitude          = peak.magnitude;
-            p.phase              = peak.phase;
-            p.energy             = peak.magnitude * peak.magnitude;
-            p.age                = 0.0f;
-            p.lifetime_remaining = 8.0f * sample_rate_ / hop_size_;
-            p.stability          = 1.0f;
-            p.coherence          = 1.0f;
-            p.harmonic_affinity  = 0.8f;
-            p.spectral_pos       = std::log2(peak.frequency / 20.0f);
-            p.state              = ParticleState::Alive;
-            p.hold_counter       = 0;
-            ++births_;
-        }
+        const float prev_coherence = coherence_;
+        coherence_ = 1.0f;
+        max_hold_frames_ = 24u;
+        max_freq_deviation_ = 0.15f * (sample_rate_ / static_cast<float>(fft_size_));
+        max_amp_deviation_  = 0.6f;
+        track(peaks, num_peaks, pool, frame_counter);
+        coherence_ = prev_coherence;
+        set_coherence(prev_coherence);
     }
 
     uint32_t births() const { return births_; }
@@ -178,9 +160,23 @@ public:
         max_amp_deviation_ = 0.3f + (1.0f - coherence_) * 0.4f;
     }
 
+    void set_transient_strength(float strength) {
+        transient_strength_ = std::clamp(strength, 0.0f, 1.0f);
+    }
+
 private:
     void update_partial(Partial& p, const Peak& peak, bool was_continuous) {
         const float two_pi = 2.0f * std::numbers::pi_v<float>;
+
+        if (transient_strength_ > 0.3f) {
+            p.frequency = peak.frequency;
+            p.amplitude = peak.magnitude;
+            p.phase     = peak.phase;
+            p.energy    = peak.magnitude * peak.magnitude;
+            p.coherence = 1.0f;
+            p.spectral_pos = std::log2(p.frequency / 20.0f);
+            return;
+        }
 
         float expected = p.phase + two_pi * p.frequency * hop_size_ / sample_rate_;
         float delta = peak.phase - expected;
@@ -213,4 +209,5 @@ private:
     uint32_t births_ = 0;
     uint32_t deaths_ = 0;
     float    coherence_ = 0.8f;
+    float    transient_strength_ = 0.0f;
 };

@@ -5,14 +5,6 @@
 #include <algorithm>
 #include <cmath>
 
-namespace {
-    constexpr double MIN_FREQ = 20.0;
-
-    float freq_to_spectral_pos(double freq_hz) {
-        return static_cast<float>(std::log2(freq_hz / MIN_FREQ));
-    }
-}
-
 static juce::AudioProcessorValueTreeState::ParameterLayout create_params() {
     juce::AudioProcessorValueTreeState::ParameterLayout params;
 
@@ -37,7 +29,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout create_params() {
     return params;
 }
 
-// ── Processor ────────────────────────────────────────────────────────
 SpectraMorphAudioProcessor::SpectraMorphAudioProcessor()
     : AudioProcessor(BusesProperties()
           .withInput("Input",  juce::AudioChannelSet::stereo(), true)
@@ -51,32 +42,33 @@ SpectraMorphAudioProcessor::~SpectraMorphAudioProcessor() {
 }
 
 void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize) {
-    // Ensure any previous session is torn down before re-initializing
     releaseResources();
 
     sample_rate_ = sampleRate;
     block_size_  = static_cast<uint32_t>(blockSize);
     fft_size_    = 2048;
     hop_size_    = fft_size_ / 4;
+    dry_latency_samples_ = fft_size_ / 2 + hop_size_;
 
     scheduler_.set_audio_params(static_cast<float>(sample_rate_), hop_size_);
 
-    // Init pipeline
     fft_.prepare(fft_size_, hop_size_, static_cast<float>(sample_rate_));
     tracker_.prepare(static_cast<float>(sample_rate_), fft_size_, hop_size_);
     resynth_.prepare(static_cast<float>(sample_rate_), fft_size_, hop_size_);
 
-    // Clear state
     pool_.clear();
     add_buf_.clear();
     snapshots_.reset();
+    sim_snapshots_.reset();
     input_ring_.clear();
     output_ring_.clear();
     visual_queue_.clear();
+    dry_delay_buf_.fill(0.0f);
+    dry_delay_write_ = 0;
     scheduler_.reset();
     frame_counter_ = 0;
+    tracked_f0_ = 0.0f;
 
-    // Copy initial params
     coherence_chaos_.store(apvts_.getRawParameterValue(ParamID::CoherenceChaos)->load());
     density_.store(apvts_.getRawParameterValue(ParamID::Density)->load());
     tonal_residual_.store(apvts_.getRawParameterValue(ParamID::TonalResidual)->load());
@@ -88,7 +80,6 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
     birth_threshold_.store(apvts_.getRawParameterValue(ParamID::BirthThreshold)->load());
     max_partials_.store(apvts_.getRawParameterValue(ParamID::MaxPartials)->load());
 
-    // Start worker threads
     running_ = true;
     dsp_thread_ = std::thread([this] { dsp_thread_func(); });
     sim_thread_ = std::thread([this] { sim_thread_func(); });
@@ -117,51 +108,19 @@ void SpectraMorphAudioProcessor::syncParamsFromApvts() {
     max_partials_.store(read(ParamID::MaxPartials));
 }
 
-void SpectraMorphAudioProcessor::applyParticleEffects() {
-    // Knob left (0) = coherence, right (1) = chaos
-    const float coherence = 1.0f - coherence_chaos_.load();
-    const float decay     = decay_.load();
-    const float density   = density_.load();
+TransientMode SpectraMorphAudioProcessor::transient_mode_for_coherence(
+    float coherence) const
+{
+    return (coherence < 0.5f) ? TransientMode::Diffuse : TransientMode::Protect;
+}
 
-    // High coherence: preserve spectrum, skip ecological drift
-    if (coherence < 0.85f) {
-        const float chaos   = 1.0f - coherence;
-        const float gravity = gravity_.load();
-        const float motion  = motion_.load();
-        const float energy_decay = 1.0f - decay * 0.08f;
-        const float amp_decay    = 1.0f - decay * 0.04f;
-
-        for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
-            if (!pool_.is_alive(i)) continue;
-
-            auto& p = pool_[i];
-            p.energy    *= energy_decay;
-            p.amplitude *= amp_decay;
-
-            const float pull = (5.0f - p.spectral_pos) * gravity * 0.01f;
-            p.velocity += (chaos - 0.5f) * motion * 0.2f;
-            p.velocity  = std::clamp(p.velocity, -2.0f, 2.0f);
-            p.spectral_pos += pull + p.velocity * motion * 0.1f;
-            p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
-            p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
-
-            p.coherence *= 1.0f - chaos * 0.03f;
-            if (p.coherence < 0.05f) p.coherence = 0.05f;
-        }
-    } else if (decay > 0.01f) {
-        const float amp_decay = 1.0f - decay * 0.02f;
-        for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
-            if (!pool_.is_alive(i)) continue;
-            pool_[i].amplitude *= amp_decay;
-            pool_[i].energy *= 1.0f - decay * 0.03f;
-        }
-    }
-
-    if (coherence < 0.85f) {
-        const uint32_t density_target = 8u + static_cast<uint32_t>(
-            density * static_cast<float>(MAX_PARTIALS - 8));
-        pool_.prune_to(density_target);
-    }
+const ParticleSnapshot* SpectraMorphAudioProcessor::snapshot_for_resynth() const {
+    const auto* sim = sim_snapshots_.read();
+    const auto* canon = snapshots_.read();
+    if (sim && canon && sim->num_partials > 0
+        && sim->frame_number == canon->frame_number)
+        return sim;
+    return canon;
 }
 
 void SpectraMorphAudioProcessor::processBlock(
@@ -170,44 +129,44 @@ void SpectraMorphAudioProcessor::processBlock(
     juce::ScopedNoDenormals noDenormals;
     syncParamsFromApvts();
 
-    float mix = dry_wet_.load();
-
-    // True bypass: no processing, no ring I/O
+    const float mix = dry_wet_.load();
     if (mix < 0.005f)
         return;
 
-    int ns = buffer.getNumSamples();
-    int nc = buffer.getNumChannels();
+    const int ns = buffer.getNumSamples();
+    const int nc = buffer.getNumChannels();
 
-    // Sum input to mono
     for (int i = 0; i < ns; ++i) {
-        float s = 0.0f;
+        float mono = 0.0f;
         for (int ch = 0; ch < nc; ++ch)
-            s += buffer.getReadPointer(ch)[i];
-        input_ring_.write(s / static_cast<float>(nc));
-    }
+            mono += buffer.getReadPointer(ch)[i];
+        mono /= static_cast<float>(nc);
 
-    // Read mono wet output once per sample, apply to all channels
-    for (int i = 0; i < ns; ++i) {
+        dry_delay_buf_[dry_delay_write_ % RING_BUFFER_SIZE] = mono;
+        input_ring_.write(mono);
+
+        const uint32_t read_idx = (dry_delay_write_ + RING_BUFFER_SIZE
+                                   - dry_latency_samples_) % RING_BUFFER_SIZE;
+        const float dry = dry_delay_buf_[read_idx];
+
         float wet = 0.0f;
         output_ring_.read(wet);
+
         for (int ch = 0; ch < nc; ++ch) {
             auto* out = buffer.getWritePointer(ch);
-            auto* in  = buffer.getReadPointer(ch);
-            out[i] = in[i] * (1.0f - mix) + wet * mix;
+            out[i] = dry * (1.0f - mix) + wet * mix;
         }
+
+        ++dry_delay_write_;
     }
 }
 
-// ── DSP Worker Thread ───────────────────────────────────────────────
 void SpectraMorphAudioProcessor::dsp_thread_func() {
-    // Local buffer for FFT input block
     std::vector<float> input_block(hop_size_, 0.0f);
 
     while (running_) {
         scheduler_.begin_frame();
 
-        // Read hop_size samples from ring buffer
         bool got_data = true;
         for (uint32_t i = 0; i < hop_size_; ++i) {
             if (!input_ring_.read(input_block[i])) {
@@ -223,22 +182,22 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             continue;
         }
 
-        // Compute input RMS for amplitude envelope matching
         float sum_sq = 0.0f;
         for (uint32_t i = 0; i < hop_size_; ++i)
             sum_sq += input_block[i] * input_block[i];
         const float input_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
 
-        // 1. FFT
         fft_.process(input_block.data());
+        const float transient_strength = fft_.transient_strength();
+        tracker_.set_transient_strength(transient_strength);
 
-        // 2. Peak detection (sub-bin refinement)
         Peak peaks[MAX_PEAKS];
         uint32_t num_peaks = 0;
-        uint32_t half_n = fft_.half_n();
+        const uint32_t half_n = fft_.half_n();
         const float coherence = 1.0f - coherence_chaos_.load();
         const float density_val = density_.load();
         const float sr = static_cast<float>(sample_rate_);
+        float f0 = tracked_f0_;
 
         float threshold = fft_.noise_floor() * birth_threshold_.load() + 0.001f;
         threshold *= 1.0f - coherence * 0.85f;
@@ -247,7 +206,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const float* phase = fft_.phase();
 
         if (coherence >= 0.85f) {
-            float f0 = PeakUtils::find_fundamental_hps(
+            f0 = PeakUtils::find_fundamental_hps(
                 mag, half_n, sr, fft_size_, threshold * 0.05f);
             if (f0 < 40.0f)
                 f0 = PeakUtils::find_fundamental_bin(
@@ -257,7 +216,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
                 mag, f0, sr, fft_size_, half_n);
             PeakUtils::build_harmonic_peaks(
                 peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
-                odd_only, MAX_PEAKS);
+                odd_only, density_val, MAX_PEAKS);
         } else {
             for (uint32_t i = 1; i < half_n - 1 && num_peaks < MAX_PEAKS; ++i) {
                 if (mag[i] > mag[i - 1] && mag[i] > mag[i + 1] && mag[i] > threshold) {
@@ -270,7 +229,7 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             }
 
             if (num_peaks > 0) {
-                const float f0 = PeakUtils::estimate_fundamental(peaks, num_peaks);
+                f0 = PeakUtils::estimate_fundamental(peaks, num_peaks);
                 PeakUtils::enrich_harmonics(
                     peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
                     threshold, coherence, MAX_PEAKS);
@@ -290,12 +249,14 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         if (coherence >= 0.85f && num_peaks > 1) {
-            const uint32_t peak_cap = static_cast<uint32_t>(
-                48.0f + density_val * static_cast<float>(MAX_PARTIALS - 48));
-            num_peaks = std::min(num_peaks, peak_cap);
+            const uint32_t pool_cap = 2u + static_cast<uint32_t>(
+                density_val * static_cast<float>(MAX_PARTIALS - 2));
+            num_peaks = std::min(num_peaks, pool_cap);
         }
 
-        // 4. Partial tracking
+        if (f0 >= 40.0f)
+            tracked_f0_ = f0;
+
         ++frame_counter_;
         tracker_.set_coherence(coherence);
         const bool run_tracking = (coherence >= 0.85f)
@@ -304,10 +265,10 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         if (run_tracking) {
             if (coherence >= 0.85f)
                 tracker_.sync_faithful(peaks, num_peaks, pool_, frame_counter_);
-            else {
+            else
                 tracker_.track(peaks, num_peaks, pool_, frame_counter_);
-                applyParticleEffects();
 
+            if (coherence < 0.85f) {
                 const uint32_t cap_user = 16u + static_cast<uint32_t>(
                     max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16));
                 const uint32_t cap_density = 8u + static_cast<uint32_t>(
@@ -318,42 +279,43 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             }
         }
 
-        // 5. Write snapshot
         {
             auto* snap = snapshots_.write_buffer();
             pool_.write_snapshot(*snap, frame_counter_);
+            PhaseManager::apply_to_snapshot(*snap, tracked_f0_, coherence, phase_seed_);
             snapshots_.commit();
         }
 
-        // 6. Resynthesis
-        const auto* snap = snapshots_.read();
-        const float tonal = 1.0f - tonal_residual_.load();
+        const auto* snap = snapshot_for_resynth();
+        const float tonal = std::clamp(1.0f - tonal_residual_.load(), 0.0f, 1.0f);
+        const TransientMode tmode = transient_mode_for_coherence(coherence);
+
         if (snap && snap->num_partials > 0) {
             resynth_.render(*snap, fft_, tonal, spread_.load(), coherence,
+                            transient_strength, tmode, tracked_f0_,
                             input_block.data(), input_rms);
         } else {
             resynth_.render_passthrough(input_block.data(), hop_size_);
         }
+
         const float* out = resynth_.output_buffer();
         for (uint32_t i = 0; i < hop_size_; ++i)
             output_ring_.write(out[i]);
 
-        // 7. Visual state
         {
             VisualState vs{};
-            const auto* s = snapshots_.read();
-            if (s) {
-                vs.frame_number      = s->frame_number;
-                vs.num_partials      = s->num_partials;
-                vs.global_coherence  = s->global_coherence;
-                vs.total_energy      = s->total_energy;
-                vs.births_this_frame = s->births_this_frame;
-                vs.deaths_this_frame = s->deaths_this_frame;
-                vs.macro_state       = static_cast<MacroState>(s->macro_state);
+            if (snap) {
+                vs.frame_number      = snap->frame_number;
+                vs.num_partials      = snap->num_partials;
+                vs.global_coherence  = snap->global_coherence;
+                vs.total_energy      = snap->total_energy;
+                vs.births_this_frame = snap->births_this_frame;
+                vs.deaths_this_frame = snap->deaths_this_frame;
+                vs.macro_state       = static_cast<MacroState>(snap->macro_state);
                 vs.cpu_load          = scheduler_.load_ema();
-                uint32_t n = std::min(s->num_partials, (uint32_t)MAX_PARTIALS);
+                const uint32_t n = std::min(snap->num_partials, (uint32_t)MAX_PARTIALS);
                 for (uint32_t i = 0; i < n; ++i) {
-                    auto& src = s->partials[i];
+                    auto& src = snap->partials[i];
                     auto& dst = vs.partials[i];
                     dst.frequency         = src.frequency;
                     dst.amplitude         = src.amplitude;
@@ -370,16 +332,26 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
     }
 }
 
-// ── Simulation Thread (paused — SPECS_12 ownership TBD) ─────────────
 void SpectraMorphAudioProcessor::sim_thread_func() {
     while (running_) {
+        const auto* canon = snapshots_.read();
+        if (canon && canon->num_partials > 0) {
+            SimParams params;
+            params.gravity = gravity_.load();
+            params.motion  = motion_.load();
+            params.decay   = decay_.load();
+            params.spread  = spread_.load();
+
+            auto* out = sim_snapshots_.write_buffer();
+            simulator_.step(*canon, *out, params, sim_rng_seed_);
+            sim_snapshots_.commit();
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 
 bool SpectraMorphAudioProcessor::hasEditor() const { return true; }
 
-// ── Editor ───────────────────────────────────────────────────────────
 juce::AudioProcessorEditor* SpectraMorphAudioProcessor::createEditor() {
     return new SpectraMorphAudioProcessorEditor(*this);
 }

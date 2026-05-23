@@ -214,20 +214,25 @@ inline bool prefer_odd_harmonics(const float* mag, float f0,
     return odd_sum > even_sum * 1.8f;
 }
 
-// High-coherence path: one partial per harmonic with cubically interpolated magnitudes
+// High-coherence path: one partial per harmonic; density scales count and floor
 inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
                                   float f0, const float* mag, const float* phase,
                                   float sample_rate, uint32_t fft_size,
                                   uint32_t half_n, bool odd_only,
-                                  uint32_t max_peaks)
+                                  float density, uint32_t max_peaks)
 {
     num_peaks = 0;
     if (f0 < 40.0f) return;
 
+    density = std::clamp(density, 0.0f, 1.0f);
+
     const float nyquist = sample_rate * 0.45f;
-    const int max_h = static_cast<int>(nyquist / f0);
+    const int max_h_full = std::max(1, static_cast<int>(nyquist / f0));
+    const int max_h = std::max(1, static_cast<int>(std::round(
+        static_cast<float>(max_h_full) * (0.06f + density * 0.94f))));
     const float bin_hz = sample_rate / static_cast<float>(fft_size);
 
+    float peak_mag = 0.0f;
     for (int h = 1; h <= max_h && num_peaks < max_peaks; ++h) {
         if (odd_only && (h % 2 == 0)) continue;
 
@@ -237,17 +242,41 @@ inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
 
         if (bin < 1 || bin >= half_n - 2) continue;
 
-        // Interpolated magnitude at exact harmonic frequency
         const float frac = bin_pos - static_cast<float>(bin);
         const float interp_mag = cubic_interpolate(
             frac, mag[bin - 1], mag[bin], mag[bin + 1], mag[bin + 2]);
         if (interp_mag < 1e-8f) continue;
+
+        peak_mag = std::max(peak_mag, interp_mag);
 
         auto& p = peaks[num_peaks++];
         p.bin_index = static_cast<uint16_t>(bin);
         p.frequency = hf;
         p.magnitude = interp_mag;
         p.phase     = phase[bin];
+    }
+
+    if (num_peaks == 0) return;
+
+    // Relative floor: low density drops weak upper harmonics
+    const float rel_floor = 0.002f + density * 0.048f;
+    const float abs_floor = peak_mag * rel_floor;
+    uint32_t write = 0;
+    for (uint32_t i = 0; i < num_peaks; ++i) {
+        if (peaks[i].magnitude >= abs_floor)
+            peaks[write++] = peaks[i];
+    }
+    num_peaks = write;
+    if (num_peaks == 0) return;
+
+    const uint32_t hard_cap = 2u + static_cast<uint32_t>(
+        density * static_cast<float>(max_peaks - 2));
+    if (num_peaks > hard_cap) {
+        std::sort(peaks, peaks + num_peaks,
+            [](const Peak& a, const Peak& b) {
+                return a.magnitude > b.magnitude;
+            });
+        num_peaks = hard_cap;
     }
 }
 

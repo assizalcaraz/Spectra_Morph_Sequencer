@@ -36,11 +36,14 @@ set(DSP_SOURCES
     src/dsp/fft/FFTProcessor.h
     src/dsp/tracking/PartialTracker.h
     src/dsp/tracking/PeakUtils.h
+    src/dsp/phase/PhaseManager.h
     src/dsp/resynthesis/Resynthesizer.h
     src/dsp/resynthesis/ResidualSynth.h
+    src/dsp/debug/SpectralMetrics.h
 )
 
 set(SIMULATION_SOURCES
+    src/simulation/ParticleSimulator.h
 )
 
 set(PLUGIN_SOURCES
@@ -107,6 +110,7 @@ add_executable(SpectraMorph_tests
     tests/test_memory.cpp
     tests/test_scheduler.cpp
     tests/test_resynthesis.cpp
+    tests/test_phase2_validation.cpp
 )
 
 target_include_directories(SpectraMorph_tests

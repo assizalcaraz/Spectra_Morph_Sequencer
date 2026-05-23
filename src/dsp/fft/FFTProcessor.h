@@ -5,11 +5,12 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <numbers>
 
-// SPECS_03 — STFT analysis (real FFT, per-bin phase vocoder, noise floor)
+// SPECS_03 — STFT analysis (real FFT, per-bin phase vocoder, noise floor, spectral flux)
 
 class FFTProcessor {
 public:
@@ -38,9 +39,16 @@ public:
         std::memset(fft_buf_.data(), 0, fft_buf_.size() * sizeof(float));
         std::memset(mag_.data(), 0, mag_.size() * sizeof(float));
         std::memset(phase_.data(), 0, phase_.size() * sizeof(float));
+        std::memset(raw_phase_.data(), 0, raw_phase_.size() * sizeof(float));
         std::memset(prev_phase_.data(), 0, prev_phase_.size() * sizeof(float));
+        std::memset(prev_mag_.data(), 0, prev_mag_.size() * sizeof(float));
         std::memset(noise_floor_bins_.data(), 0, noise_floor_bins_.size() * sizeof(float));
         noise_floor_ = 0.0f;
+        spectral_flux_ = 0.0f;
+        flux_floor_ = 0.0f;
+        prev_flux_ = 0.0f;
+        transient_strength_ = 0.0f;
+        is_transient_ = false;
     }
 
     void process(const float* input) {
@@ -60,10 +68,12 @@ public:
                                 / static_cast<float>(fft_size_);
 
         mag_[0] = std::abs(fft_buf_[0]);
-        phase_[0] = (fft_buf_[0] >= 0.0f) ? 0.0f : std::numbers::pi_v<float>;
+        raw_phase_[0] = (fft_buf_[0] >= 0.0f) ? 0.0f : std::numbers::pi_v<float>;
+        phase_[0] = raw_phase_[0];
 
         if (half_n_ > 0) {
             mag_[half_n_] = std::abs(fft_buf_[1]);
+            raw_phase_[half_n_] = 0.0f;
             phase_[half_n_] = 0.0f;
         }
 
@@ -71,18 +81,20 @@ public:
             const float re = fft_buf_[k * 2];
             const float im = fft_buf_[k * 2 + 1];
             mag_[k] = std::sqrt(re * re + im * im);
-            float ph = std::atan2(im, re);
+            const float ph_raw = std::atan2(im, re);
+            raw_phase_[k] = ph_raw;
 
             const float expected = prev_phase_[k] + phase_scale * static_cast<float>(k);
-            float delta = ph - expected;
+            float delta = ph_raw - expected;
             delta = std::fmod(delta + std::numbers::pi_v<float>, two_pi)
                   - std::numbers::pi_v<float>;
-            ph = expected + delta;
+            const float ph = expected + delta;
             phase_[k] = ph;
             prev_phase_[k] = ph;
         }
 
         update_noise_floor();
+        update_spectral_flux();
     }
 
     void inverse_transform(const float* mag_in, const float* phase_in,
@@ -106,8 +118,9 @@ public:
             output_time[i] = fft_buf_[i] * window_[i] * window_gain_;
     }
 
-    const float* magnitude() const { return mag_.data(); }
-    const float* phase()     const { return phase_.data(); }
+    const float* magnitude()   const { return mag_.data(); }
+    const float* phase()       const { return phase_.data(); }
+    const float* raw_phase()   const { return raw_phase_.data(); }
     const float* noise_floor_bins() const { return noise_floor_bins_.data(); }
 
     uint32_t fft_size()    const { return fft_size_; }
@@ -120,7 +133,10 @@ public:
         return static_cast<float>(bin) * sample_rate_ / static_cast<float>(fft_size_);
     }
 
-    float noise_floor() const { return noise_floor_; }
+    float noise_floor()         const { return noise_floor_; }
+    float spectral_flux()       const { return spectral_flux_; }
+    float transient_strength()  const { return transient_strength_; }
+    bool  is_transient()        const { return is_transient_; }
 
 private:
     void update_noise_floor() {
@@ -132,6 +148,34 @@ private:
         noise_floor_ = (half_n_ > 0) ? sum / static_cast<float>(half_n_) : 0.0f;
     }
 
+    void update_spectral_flux() {
+        const uint32_t k_start = half_n_ / 4;
+        float flux = 0.0f;
+        for (uint32_t k = k_start; k < half_n_; ++k) {
+            const float delta = mag_[k] - prev_mag_[k];
+            if (delta > 0.0f)
+                flux += delta;
+            prev_mag_[k] = mag_[k];
+        }
+
+        spectral_flux_ = flux;
+        flux_floor_ = flux_floor_ * 0.92f + flux * 0.08f;
+
+        const float threshold = flux_floor_ * 2.2f + 1e-5f;
+        const bool detected = flux > threshold
+            && (prev_flux_ < 1e-8f || flux > prev_flux_ * 1.25f);
+        prev_flux_ = flux;
+
+        if (detected)
+            transient_strength_ = std::min(1.0f, transient_strength_ + 0.55f);
+        else {
+            const float decay = hop_size_ / (0.05f * sample_rate_);
+            transient_strength_ *= std::max(0.0f, 1.0f - decay);
+        }
+
+        is_transient_ = transient_strength_ > 0.3f;
+    }
+
     uint32_t fft_size_    = 2048;
     uint32_t hop_size_    = 512;
     uint32_t half_n_      = 1024;
@@ -139,6 +183,11 @@ private:
     float    noise_floor_ = 0.0f;
     float    window_sum_  = 0.0f;
     float    window_gain_ = 1.0f;
+    float    spectral_flux_ = 0.0f;
+    float    flux_floor_ = 0.0f;
+    float    prev_flux_ = 0.0f;
+    float    transient_strength_ = 0.0f;
+    bool     is_transient_ = false;
 
     std::unique_ptr<juce::dsp::FFT> fft_;
 
@@ -147,6 +196,8 @@ private:
     std::array<float, FFT_MAX_SIZE * 2>     fft_buf_{};
     std::array<float, FFT_MAX_SIZE / 2 + 1> mag_{};
     std::array<float, FFT_MAX_SIZE / 2 + 1> phase_{};
+    std::array<float, FFT_MAX_SIZE / 2 + 1> raw_phase_{};
     std::array<float, FFT_MAX_SIZE / 2 + 1> prev_phase_{};
+    std::array<float, FFT_MAX_SIZE / 2 + 1> prev_mag_{};
     std::array<float, FFT_MAX_SIZE / 2 + 1> noise_floor_bins_{};
 };

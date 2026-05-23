@@ -16,9 +16,12 @@
 #include "../dsp/fft/FFTProcessor.h"
 #include "../dsp/tracking/PartialTracker.h"
 #include "../dsp/resynthesis/Resynthesizer.h"
+#include "../dsp/phase/PhaseManager.h"
+#include "../simulation/ParticleSimulator.h"
 
 #include <atomic>
 #include <thread>
+#include <array>
 
 // ─── Parameter IDs ───────────────────────────────────────────────────
 namespace ParamID {
@@ -41,7 +44,6 @@ public:
     SpectraMorphAudioProcessor();
     ~SpectraMorphAudioProcessor() override;
 
-    // ── JUCE overrides ─────────────────────────────────────────────
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -64,22 +66,16 @@ public:
     void getStateInformation(juce::MemoryBlock&) override;
     void setStateInformation(const void*, int) override;
 
-    // ── Thread-safe parameter access ───────────────────────────────
     float getParam(std::atomic<float>& param) const { return param.load(); }
     void  setParam(std::atomic<float>& param, float v) { param.store(v); }
 
-    // ── Snapshot access ────────────────────────────────────────────
     const ParticleSnapshot* read_snapshot() const { return snapshots_.read(); }
     bool read_visual(VisualState& vs) { return visual_queue_.read(vs); }
 
-    // ── Scheduler ──────────────────────────────────────────────────
     Scheduler& get_scheduler() { return scheduler_; }
-
-    // ── Parameter access (for editor attachments) ──────────────────
     juce::AudioProcessorValueTreeState& get_apvts() { return apvts_; }
 
 private:
-    // ── Threads ────────────────────────────────────────────────────
     std::thread dsp_thread_;
     std::thread sim_thread_;
     std::atomic<bool> running_{false};
@@ -87,32 +83,37 @@ private:
     void dsp_thread_func();
     void sim_thread_func();
     void syncParamsFromApvts();
-    void applyParticleEffects();
+    const ParticleSnapshot* snapshot_for_resynth() const;
+    TransientMode transient_mode_for_coherence(float coherence) const;
 
-    // ── DSP pipeline ───────────────────────────────────────────────
     FFTProcessor      fft_;
     PartialTracker    tracker_;
     Resynthesizer     resynth_;
+    ParticleSimulator simulator_;
 
-    // ── Memory ─────────────────────────────────────────────────────
     PartialPool       pool_;
     AdditiveBuffer    add_buf_;
     DoubleBuffer<ParticleSnapshot> snapshots_;
+    DoubleBuffer<ParticleSnapshot> sim_snapshots_;
 
-    // ── Communication ──────────────────────────────────────────────
     AudioRingBuffer   input_ring_;
     AudioRingBuffer   output_ring_;
     VisualRingBuffer  visual_queue_;
 
-    // ── Scheduling ─────────────────────────────────────────────────
     Scheduler         scheduler_;
     uint32_t          frame_counter_ = 0;
     double            sample_rate_   = 48000.0;
     int               block_size_    = 256;
     uint32_t          hop_size_      = 512;
     uint32_t          fft_size_      = 2048;
+    uint32_t          dry_latency_samples_ = 1536;
+    uint32_t          dry_delay_write_ = 0;
+    float             tracked_f0_    = 0.0f;
+    uint64_t          phase_seed_    = 12345;
+    uint64_t          sim_rng_seed_  = 54321;
 
-    // ── Parameters (atomic cache, SPECS_12 §4) ─────────────────────
+    std::array<float, RING_BUFFER_SIZE> dry_delay_buf_{};
+
     std::atomic<float> coherence_chaos_{0.2f};
     std::atomic<float> density_{0.5f};
     std::atomic<float> tonal_residual_{0.7f};
@@ -122,9 +123,8 @@ private:
     std::atomic<float> spread_{0.5f};
     std::atomic<float> dry_wet_{0.5f};
     std::atomic<float> birth_threshold_{0.1f};
-    std::atomic<float> max_partials_{0.5f};  // 0-1 mapped to 16-256
+    std::atomic<float> max_partials_{0.5f};
 
-    // ── APVTS ──────────────────────────────────────────────────────
     juce::AudioProcessorValueTreeState apvts_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpectraMorphAudioProcessor)

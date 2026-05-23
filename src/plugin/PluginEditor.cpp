@@ -93,8 +93,11 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
         g.setColour(juce::Colours::lightgrey);
         const float mode_coherence = 1.0f - processor_.get_apvts()
             .getRawParameterValue(ParamID::CoherenceChaos)->load();
+        const float density = processor_.get_apvts()
+            .getRawParameterValue(ParamID::Density)->load();
         g.drawText("Partials: " + juce::String(vs.num_partials)
             + "  Mode: " + juce::String(mode_coherence, 2)
+            + "  Density: " + juce::String(density, 2)
             + "  Phase lock: " + juce::String(vs.global_coherence, 2)
             + "  CPU: " + juce::String(vs.cpu_load * 100.0f, 1) + "%",
             telemetry,
