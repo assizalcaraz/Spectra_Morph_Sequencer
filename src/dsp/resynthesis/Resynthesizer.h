@@ -37,21 +37,26 @@ public:
         if (add_buf_.num_active > 0)
             render_additive(hop_size_);
 
-        // Spectral residual: fill energy not captured by partials
+        // Residual: fills gaps between partials (stronger when Tonal/Residual is up)
         if (input_hop != nullptr && mag != nullptr && half_n > 0) {
-            const float residual_gain = (1.0f - tonal_gain) * (0.15f + coherence * 0.55f);
+            const float residual_gain = (1.0f - tonal_gain) * (0.2f + coherence * 0.6f)
+                                      + tonal_gain * coherence * 0.08f;
             if (residual_gain > 0.01f)
                 add_spectral_residual(input_hop, mag, half_n, residual_gain);
         }
 
-        // Frame crossfade — lighter at high coherence (sharper spectrum)
-        const float pi = std::numbers::pi_v<float>;
-        const float xfade_strength = 0.25f + (1.0f - coherence) * 0.75f;
-        for (uint32_t i = 0; i < hop_size_; ++i) {
-            float fade_in  = 0.5f * (1.0f - std::cos(pi * static_cast<float>(i) / hop_size_));
-            float fade_out = 1.0f - fade_in;
-            output_buf_[i] = output_buf_[i] * (fade_in * (1.0f - xfade_strength) + xfade_strength)
-                           + prev_output_[i] * (fade_out * (1.0f - xfade_strength));
+        // Frame crossfade — off at high coherence (avoids spectral smearing)
+        if (coherence_ < 0.9f) {
+            const float pi = std::numbers::pi_v<float>;
+            const float xfade_strength = (1.0f - coherence_) * 0.85f;
+            for (uint32_t i = 0; i < hop_size_; ++i) {
+                const float fade_in = 0.5f * (1.0f - std::cos(
+                    pi * static_cast<float>(i) / static_cast<float>(hop_size_)));
+                const float fade_out = 1.0f - fade_in;
+                output_buf_[i] = output_buf_[i]
+                    * (fade_in * (1.0f - xfade_strength) + xfade_strength)
+                    + prev_output_[i] * (fade_out * xfade_strength);
+            }
         }
 
         std::memcpy(prev_output_, output_buf_, hop_size_ * sizeof(float));

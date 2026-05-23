@@ -157,9 +157,11 @@ void SpectraMorphAudioProcessor::applyParticleEffects() {
         }
     }
 
-    const uint32_t density_target = 8u + static_cast<uint32_t>(
-        density * static_cast<float>(MAX_PARTIALS - 8));
-    pool_.prune_to(density_target);
+    if (coherence < 0.85f) {
+        const uint32_t density_target = 8u + static_cast<uint32_t>(
+            density * static_cast<float>(MAX_PARTIALS - 8));
+        pool_.prune_to(density_target);
+    }
 }
 
 void SpectraMorphAudioProcessor::processBlock(
@@ -233,39 +235,55 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const float sr = static_cast<float>(sample_rate_);
 
         float threshold = fft_.noise_floor() * birth_threshold_.load() + 0.001f;
-        threshold *= 1.0f - coherence * 0.7f;
+        threshold *= 1.0f - coherence * 0.85f;
 
         const float* mag   = fft_.magnitude();
         const float* phase = fft_.phase();
 
-        for (uint32_t i = 1; i < half_n - 1 && num_peaks < MAX_PEAKS; ++i) {
-            if (mag[i] > mag[i - 1] && mag[i] > mag[i + 1] && mag[i] > threshold) {
-                auto& p = peaks[num_peaks++];
-                p.bin_index = static_cast<uint16_t>(i);
-                p.frequency = PeakUtils::refine_frequency(
-                    i, mag, sr, fft_size_);
-                p.magnitude = mag[i];
-                p.phase     = phase[i];
+        if (coherence >= 0.85f) {
+            // Faithful mode: harmonic grid from f0 (triangle/saw/sine)
+            const float f0 = PeakUtils::find_fundamental_bin(
+                mag, half_n, sr, fft_size_, threshold * 0.25f);
+            const bool odd_only = PeakUtils::prefer_odd_harmonics(
+                mag, f0, sr, fft_size_, half_n);
+            PeakUtils::build_harmonic_peaks(
+                peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
+                odd_only, MAX_PEAKS);
+        } else {
+            for (uint32_t i = 1; i < half_n - 1 && num_peaks < MAX_PEAKS; ++i) {
+                if (mag[i] > mag[i - 1] && mag[i] > mag[i + 1] && mag[i] > threshold) {
+                    auto& p = peaks[num_peaks++];
+                    p.bin_index = static_cast<uint16_t>(i);
+                    p.frequency = PeakUtils::refine_frequency(i, mag, sr, fft_size_);
+                    p.magnitude = mag[i];
+                    p.phase     = phase[i];
+                }
+            }
+
+            if (num_peaks > 0) {
+                const float f0 = PeakUtils::estimate_fundamental(peaks, num_peaks);
+                PeakUtils::enrich_harmonics(
+                    peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
+                    threshold, coherence, MAX_PEAKS);
+            }
+
+            if (num_peaks > 1) {
+                std::sort(peaks, peaks + num_peaks,
+                    [](const Peak& a, const Peak& b) {
+                        return a.magnitude > b.magnitude;
+                    });
+                const float cap_lo = 4.0f + density_val * 80.0f;
+                const float cap_hi = 24.0f + density_val * 200.0f;
+                const uint32_t peak_cap = static_cast<uint32_t>(
+                    cap_lo + coherence * (cap_hi - cap_lo));
+                num_peaks = std::min(num_peaks, std::max(8u, peak_cap));
             }
         }
 
-        if (num_peaks > 0) {
-            const float f0 = PeakUtils::estimate_fundamental(peaks, num_peaks);
-            PeakUtils::enrich_harmonics(
-                peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
-                threshold, coherence, MAX_PEAKS);
-        }
-
-        if (num_peaks > 1) {
-            std::sort(peaks, peaks + num_peaks,
-                [](const Peak& a, const Peak& b) {
-                    return a.magnitude > b.magnitude;
-                });
-            const float cap_lo = 4.0f + density_val * 80.0f;
-            const float cap_hi = 24.0f + density_val * 200.0f;
+        if (coherence >= 0.85f && num_peaks > 1) {
             const uint32_t peak_cap = static_cast<uint32_t>(
-                cap_lo + coherence * (cap_hi - cap_lo));
-            num_peaks = std::min(num_peaks, std::max(8u, peak_cap));
+                16.0f + density_val * 180.0f);
+            num_peaks = std::min(num_peaks, peak_cap);
         }
 
         // 4. Partial tracking (cadenced)

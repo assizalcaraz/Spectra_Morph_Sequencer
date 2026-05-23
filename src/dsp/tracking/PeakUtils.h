@@ -106,4 +106,76 @@ inline float estimate_fundamental(const Peak* peaks, uint32_t num_peaks)
     return best_f0;
 }
 
+// Triangle / square: odd harmonics dominate
+inline bool prefer_odd_harmonics(const float* mag, float f0,
+                                 float sample_rate, uint32_t fft_size,
+                                 uint32_t half_n)
+{
+    if (f0 < 40.0f) return false;
+
+    auto mag_at = [&](int h) -> float {
+        const uint32_t bin = static_cast<uint32_t>(std::round(
+            f0 * static_cast<float>(h) * static_cast<float>(fft_size) / sample_rate));
+        if (bin < 1 || bin >= half_n - 1) return 0.0f;
+        return mag[bin];
+    };
+
+    const float even_sum = mag_at(2) + mag_at(4) + mag_at(6);
+    const float odd_sum  = mag_at(1) + mag_at(3) + mag_at(5) + mag_at(7);
+    return odd_sum > even_sum * 1.8f;
+}
+
+// High-coherence path: one partial per harmonic, magnitudes from FFT bins
+inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
+                                  float f0, const float* mag, const float* phase,
+                                  float sample_rate, uint32_t fft_size,
+                                  uint32_t half_n, bool odd_only,
+                                  uint32_t max_peaks)
+{
+    num_peaks = 0;
+    if (f0 < 40.0f) return;
+
+    const float nyquist = sample_rate * 0.45f;
+    const int max_h = static_cast<int>(nyquist / f0);
+
+    for (int h = 1; h <= max_h && num_peaks < max_peaks; ++h) {
+        if (odd_only && (h % 2 == 0)) continue;
+
+        const uint32_t bin = static_cast<uint32_t>(std::round(
+            f0 * static_cast<float>(h) * static_cast<float>(fft_size) / sample_rate));
+        if (bin < 1 || bin >= half_n - 1) continue;
+        if (mag[bin] < 1e-8f) continue;
+
+        auto& p = peaks[num_peaks++];
+        p.bin_index = static_cast<uint16_t>(bin);
+        p.frequency = refine_frequency(bin, mag, sample_rate, fft_size);
+        p.magnitude = mag[bin];
+        p.phase     = phase[bin];
+    }
+}
+
+inline float find_fundamental_bin(const float* mag, uint32_t half_n,
+                                  float sample_rate, uint32_t fft_size,
+                                  float threshold)
+{
+    const float bin_hz = sample_rate / static_cast<float>(fft_size);
+    uint32_t best_bin = 0;
+    float best_mag = threshold;
+
+    const uint32_t max_bin = std::min(half_n - 1,
+        static_cast<uint32_t>(2000.0f / bin_hz));
+
+    for (uint32_t i = 1; i < max_bin; ++i) {
+        if (mag[i] > best_mag
+            && mag[i] > mag[i - 1]
+            && mag[i] >= mag[i + 1]) {
+            best_mag = mag[i];
+            best_bin = i;
+        }
+    }
+
+    if (best_bin == 0) return 0.0f;
+    return refine_frequency(best_bin, mag, sample_rate, fft_size);
+}
+
 } // namespace PeakUtils
