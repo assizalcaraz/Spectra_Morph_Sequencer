@@ -223,6 +223,12 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             continue;
         }
 
+        // Compute input RMS for amplitude envelope matching
+        float sum_sq = 0.0f;
+        for (uint32_t i = 0; i < hop_size_; ++i)
+            sum_sq += input_block[i] * input_block[i];
+        const float input_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
+
         // 1. FFT
         fft_.process(input_block.data());
 
@@ -241,9 +247,9 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const float* phase = fft_.phase();
 
         if (coherence >= 0.85f) {
-            // Faithful mode: harmonic grid from f0 (triangle/saw/sine)
-            const float f0 = PeakUtils::find_fundamental_bin(
-                mag, half_n, sr, fft_size_, threshold * 0.25f);
+            // Faithful mode: harmonic grid from f0, cubically interpolated magnitudes
+            const float f0 = PeakUtils::find_fundamental_hps(
+                mag, half_n, sr, fft_size_, threshold * 0.01f);
             const bool odd_only = PeakUtils::prefer_odd_harmonics(
                 mag, f0, sr, fft_size_, half_n);
             PeakUtils::build_harmonic_peaks(
@@ -313,7 +319,8 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             const float tonal = 1.0f - tonal_residual_.load();
             resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_,
                             tonal, spread_.load(), coherence,
-                            input_block.data(), mag, half_n, fft_size_);
+                            input_block.data(), mag, half_n, fft_size_,
+                            input_rms);
             const float* out = resynth_.output_buffer();
             for (uint32_t i = 0; i < hop_size_; ++i)
                 output_ring_.write(out[i]);

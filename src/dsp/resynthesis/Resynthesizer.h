@@ -22,7 +22,8 @@ public:
     void render(const ParticleSnapshot& snap, float sample_rate,
                 uint32_t hop_size, float tonal_gain, float spread,
                 float coherence, const float* input_hop,
-                const float* mag, uint32_t half_n, uint32_t fft_size)
+                const float* mag, uint32_t half_n, uint32_t fft_size,
+                float input_rms = 0.0f)
     {
         sample_rate_ = sample_rate;
         hop_size_    = hop_size;
@@ -45,10 +46,10 @@ public:
                 add_spectral_residual(input_hop, mag, half_n, residual_gain);
         }
 
-        // Frame crossfade — off at high coherence (avoids spectral smearing)
-        if (coherence_ < 0.9f) {
+        // Frame crossfade — reduced at high coherence to avoid smearing
+        const float xfade_strength = 0.04f + (1.0f - coherence_) * 0.55f;
+        if (xfade_strength > 0.001f) {
             const float pi = std::numbers::pi_v<float>;
-            const float xfade_strength = (1.0f - coherence_) * 0.85f;
             for (uint32_t i = 0; i < hop_size_; ++i) {
                 const float fade_in = 0.5f * (1.0f - std::cos(
                     pi * static_cast<float>(i) / static_cast<float>(hop_size_)));
@@ -56,6 +57,20 @@ public:
                 output_buf_[i] = output_buf_[i]
                     * (fade_in * (1.0f - xfade_strength) + xfade_strength)
                     + prev_output_[i] * (fade_out * xfade_strength);
+            }
+        }
+
+        // Amplitude envelope matching: scale output RMS to match input RMS
+        if (input_rms > 0.001f) {
+            float sum_sq = 0.0f;
+            for (uint32_t i = 0; i < hop_size_; ++i)
+                sum_sq += output_buf_[i] * output_buf_[i];
+            const float output_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
+            if (output_rms > 0.0001f) {
+                const float gain = std::clamp(
+                    input_rms / output_rms, 0.1f, 10.0f);
+                for (uint32_t i = 0; i < hop_size_; ++i)
+                    output_buf_[i] *= gain;
             }
         }
 
