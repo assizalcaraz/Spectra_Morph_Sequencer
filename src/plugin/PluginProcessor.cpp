@@ -119,24 +119,32 @@ void SpectraMorphAudioProcessor::applyParticleEffects() {
     const float gravity = gravity_.load();
     const float motion  = motion_.load();
     const float chaos   = coherence_chaos_.load();
-    const float energy_decay = 0.9998f - decay * 0.035f;
+    const float density = density_.load();
+
+    const float energy_decay = 1.0f - decay * 0.08f;
+    const float amp_decay    = 1.0f - decay * 0.04f;
 
     for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
         if (!pool_.is_alive(i)) continue;
 
         auto& p = pool_[i];
-        p.energy *= energy_decay;
-        p.amplitude *= 0.985f + (1.0f - decay) * 0.015f;
+        p.energy    *= energy_decay;
+        p.amplitude *= amp_decay;
 
-        const float pull = (5.0f - p.spectral_pos) * gravity * 0.001f;
-        p.velocity += (chaos - 0.5f) * motion * 0.05f;
-        p.spectral_pos += pull + p.velocity * motion * 0.02f;
+        // Gravity: pull toward spectral center (pos 5 = 640 Hz)
+        // At gravity=10, a partial at 20Hz reaches 640Hz in ~1s
+        const float pull = (5.0f - p.spectral_pos) * gravity * 0.01f;
+        p.velocity += (chaos - 0.5f) * motion * 0.2f;
+        p.velocity  = std::clamp(p.velocity, -2.0f, 2.0f);
+        p.spectral_pos += pull + p.velocity * motion * 0.1f;
         p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
         p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
 
-        p.coherence *= 1.0f - chaos * 0.003f;
+        // Coherence decays faster with chaos
+        p.coherence *= 1.0f - chaos * 0.03f;
         if (p.coherence < 0.05f) p.coherence = 0.05f;
     }
+
 }
 
 void SpectraMorphAudioProcessor::processBlock(
@@ -232,9 +240,11 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             tracker_.track(peaks, num_peaks, pool_, frame_counter_);
             applyParticleEffects();
 
-            const uint32_t user_cap = 16u + static_cast<uint32_t>(
-                max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16));
-            pool_.prune_to(std::min(user_cap, scheduler_.max_partials()));
+            const uint32_t user_cap = std::min(
+                16u + static_cast<uint32_t>(
+                    max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16)),
+                scheduler_.max_partials());
+            pool_.prune_to(user_cap);
         }
 
         // 5. Write snapshot
