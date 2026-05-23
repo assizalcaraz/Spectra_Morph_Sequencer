@@ -51,6 +51,30 @@ inline float magnitude_at(float freq_hz, const float* mag,
                                    mag[bin + 1], mag[bin + 2]);
 }
 
+inline float find_fundamental_bin(const float* mag, uint32_t half_n,
+                                  float sample_rate, uint32_t fft_size,
+                                  float threshold)
+{
+    const float bin_hz = sample_rate / static_cast<float>(fft_size);
+    uint32_t best_bin = 0;
+    float best_mag = threshold;
+
+    const uint32_t max_bin = std::min(half_n - 1,
+        static_cast<uint32_t>(2000.0f / bin_hz));
+
+    for (uint32_t i = 1; i < max_bin; ++i) {
+        if (mag[i] > best_mag
+            && mag[i] > mag[i - 1]
+            && mag[i] >= mag[i + 1]) {
+            best_mag = mag[i];
+            best_bin = i;
+        }
+    }
+
+    if (best_bin == 0) return 0.0f;
+    return refine_frequency(best_bin, mag, sample_rate, fft_size);
+}
+
 // Harmonic Product Spectrum: find F0 by accumulating harmonic energy
 inline float find_fundamental_hps(const float* mag, uint32_t half_n,
                                    float sample_rate, uint32_t fft_size,
@@ -63,21 +87,29 @@ inline float find_fundamental_hps(const float* mag, uint32_t half_n,
 
     float best_f0 = 0.0f;
     float best_score = threshold;
-    const int max_harmonics = 5;
+    uint32_t best_bin = 0;
+    const int max_harmonics = 8;
 
     for (uint32_t b = lo_bin; b < hi_bin; ++b) {
         float score = mag[b];
         if (score < 1e-8f) continue;
         for (int h = 2; h <= max_harmonics; ++h) {
-            const uint32_t hb = b * h;
+            const uint32_t hb = b * static_cast<uint32_t>(h);
             if (hb >= half_n) break;
             score += mag[hb];
         }
         if (score > best_score) {
             best_score = score;
-            best_f0 = static_cast<float>(b) * bin_hz;
+            best_bin = b;
         }
     }
+
+    if (best_bin == 0) return 0.0f;
+    best_f0 = refine_frequency(best_bin, mag, sample_rate, fft_size);
+
+    const float refined = find_fundamental_bin(mag, half_n, sample_rate, fft_size, threshold);
+    if (refined > 40.0f && refined < best_f0 * 1.5f)
+        return refined;
 
     return best_f0;
 }
@@ -217,30 +249,6 @@ inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
         p.magnitude = interp_mag;
         p.phase     = phase[bin];
     }
-}
-
-inline float find_fundamental_bin(const float* mag, uint32_t half_n,
-                                  float sample_rate, uint32_t fft_size,
-                                  float threshold)
-{
-    const float bin_hz = sample_rate / static_cast<float>(fft_size);
-    uint32_t best_bin = 0;
-    float best_mag = threshold;
-
-    const uint32_t max_bin = std::min(half_n - 1,
-        static_cast<uint32_t>(2000.0f / bin_hz));
-
-    for (uint32_t i = 1; i < max_bin; ++i) {
-        if (mag[i] > best_mag
-            && mag[i] > mag[i - 1]
-            && mag[i] >= mag[i + 1]) {
-            best_mag = mag[i];
-            best_bin = i;
-        }
-    }
-
-    if (best_bin == 0) return 0.0f;
-    return refine_frequency(best_bin, mag, sample_rate, fft_size);
 }
 
 } // namespace PeakUtils

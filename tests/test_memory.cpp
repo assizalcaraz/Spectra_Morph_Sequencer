@@ -61,7 +61,7 @@ void test_memory() {
     // Additive buffer
     AdditiveBuffer abuf;
     assert(abuf.num_active == 0);
-    abuf.from_snapshot(snap, 48000.0f);
+    abuf.from_snapshot(snap, 48000.0f, 512u);
     assert(abuf.num_active == 0);
 
     printf("OK\n");

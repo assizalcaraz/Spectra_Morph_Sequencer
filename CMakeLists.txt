@@ -35,7 +35,9 @@ set(CORE_SOURCES
 set(DSP_SOURCES
     src/dsp/fft/FFTProcessor.h
     src/dsp/tracking/PartialTracker.h
+    src/dsp/tracking/PeakUtils.h
     src/dsp/resynthesis/Resynthesizer.h
+    src/dsp/resynthesis/ResidualSynth.h
 )
 
 set(SIMULATION_SOURCES
@@ -104,11 +106,17 @@ add_executable(SpectraMorph_tests
     tests/TestRunner.cpp
     tests/test_memory.cpp
     tests/test_scheduler.cpp
+    tests/test_resynthesis.cpp
 )
 
 target_include_directories(SpectraMorph_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(SpectraMorph_tests
+    PRIVATE
+        juce::juce_dsp
 )
 
 # ── Compiler flags ────────────────────────────────────────────────────

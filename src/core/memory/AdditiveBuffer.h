@@ -2,35 +2,49 @@
 
 #include "../types/Partial.h"
 #include "../types/Types.h"
+#include <cmath>
+#include <algorithm>
+#include <cstring>
 
-// SPECS_09 — SoA layout for the additive oscillator bank
-// Ensures cache-friendly iteration over all partials
 struct alignas(32) AdditiveBuffer {
     float freq[MAX_PARTIALS]   = {};
     float amp[MAX_PARTIALS]    = {};
     float phase[MAX_PARTIALS]  = {};
-    float env[MAX_PARTIALS]    = {};  // birth/death envelope
+    float env[MAX_PARTIALS]    = {};
 
-    // Bitmask of active indices (8 x uint32)
     uint32_t active_mask[(MAX_PARTIALS + 31) / 32] = {};
     uint32_t num_active = 0;
+    float    sample_rate_ = 48000.0f;
+    float    hop_size_    = 512.0f;
 
-    // Desnapshot: flatten AoS Partial[] into SoA buffers
-    void from_snapshot(const ParticleSnapshot& snap, float sample_rate) {
-        num_active = snap.num_partials;
+    void from_snapshot(const ParticleSnapshot& snap, float sample_rate,
+                       uint32_t hop_size)
+    {
+        sample_rate_ = sample_rate;
+        hop_size_    = static_cast<float>(hop_size);
+        num_active   = snap.num_partials;
         std::memset(active_mask, 0, sizeof(active_mask));
+
+        const float env_samples = sample_rate_ * 0.003f;
+        const float env_step = (hop_size_ > 1.0f) ? (1.0f / env_samples) : 1.0f;
 
         for (uint32_t i = 0; i < num_active; ++i) {
             const auto& p = snap.partials[i];
             freq[i]  = p.frequency;
             amp[i]   = p.amplitude;
             phase[i] = p.phase;
-            env[i]   = (p.state == ParticleState::Alive) ? 1.0f
-                     : (p.state == ParticleState::Dying) ? 0.3f
-                     : 0.0f;
 
-            uint32_t word = i / 32;
-            uint32_t bit  = i % 32;
+            if (p.state == ParticleState::Alive) {
+                env[i] = 1.0f;
+            } else if (p.state == ParticleState::Dying) {
+                const float t = std::min(p.age / env_samples, 1.0f);
+                env[i] = 0.5f * (1.0f + std::cos(3.14159265f * t));
+            } else {
+                env[i] = 0.0f;
+            }
+
+            const uint32_t word = i / 32;
+            const uint32_t bit  = i % 32;
             active_mask[word] |= (1u << bit);
         }
     }

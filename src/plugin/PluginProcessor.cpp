@@ -64,7 +64,7 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
     // Init pipeline
     fft_.prepare(fft_size_, hop_size_, static_cast<float>(sample_rate_));
     tracker_.prepare(static_cast<float>(sample_rate_), fft_size_, hop_size_);
-    resynth_.prepare(static_cast<float>(sample_rate_));
+    resynth_.prepare(static_cast<float>(sample_rate_), fft_size_, hop_size_);
 
     // Clear state
     pool_.clear();
@@ -247,9 +247,12 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const float* phase = fft_.phase();
 
         if (coherence >= 0.85f) {
-            // Faithful mode: harmonic grid from f0, cubically interpolated magnitudes
-            const float f0 = PeakUtils::find_fundamental_hps(
-                mag, half_n, sr, fft_size_, threshold * 0.01f);
+            float f0 = PeakUtils::find_fundamental_hps(
+                mag, half_n, sr, fft_size_, threshold * 0.05f);
+            if (f0 < 40.0f)
+                f0 = PeakUtils::find_fundamental_bin(
+                    mag, half_n, sr, fft_size_, threshold * 0.1f);
+
             const bool odd_only = PeakUtils::prefer_odd_harmonics(
                 mag, f0, sr, fft_size_, half_n);
             PeakUtils::build_harmonic_peaks(
@@ -287,24 +290,32 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         if (coherence >= 0.85f && num_peaks > 1) {
-            const float tonal = 1.0f - tonal_residual_.load();
             const uint32_t peak_cap = static_cast<uint32_t>(
-                32.0f + density_val * 200.0f + tonal * 80.0f);
+                48.0f + density_val * static_cast<float>(MAX_PARTIALS - 48));
             num_peaks = std::min(num_peaks, peak_cap);
         }
 
-        // 4. Partial tracking (cadenced)
+        // 4. Partial tracking
         ++frame_counter_;
         tracker_.set_coherence(coherence);
-        if (scheduler_.tick(frame_counter_)) {
-            tracker_.track(peaks, num_peaks, pool_, frame_counter_);
-            applyParticleEffects();
+        const bool run_tracking = (coherence >= 0.85f)
+            || scheduler_.tick(frame_counter_);
 
-            const uint32_t user_cap = std::min(
-                16u + static_cast<uint32_t>(
-                    max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16)),
-                scheduler_.max_partials());
-            pool_.prune_to(user_cap);
+        if (run_tracking) {
+            if (coherence >= 0.85f)
+                tracker_.sync_faithful(peaks, num_peaks, pool_, frame_counter_);
+            else {
+                tracker_.track(peaks, num_peaks, pool_, frame_counter_);
+                applyParticleEffects();
+
+                const uint32_t cap_user = 16u + static_cast<uint32_t>(
+                    max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16));
+                const uint32_t cap_density = 8u + static_cast<uint32_t>(
+                    density_val * static_cast<float>(MAX_PARTIALS - 8));
+                const uint32_t effective_cap = std::min(
+                    cap_user, std::min(cap_density, scheduler_.max_partials()));
+                pool_.prune_to(effective_cap);
+            }
         }
 
         // 5. Write snapshot
@@ -316,16 +327,16 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
 
         // 6. Resynthesis
         const auto* snap = snapshots_.read();
+        const float tonal = 1.0f - tonal_residual_.load();
         if (snap && snap->num_partials > 0) {
-            const float tonal = 1.0f - tonal_residual_.load();
-            resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_,
-                            tonal, spread_.load(), coherence,
-                            input_block.data(), mag, half_n, fft_size_,
-                            input_rms);
-            const float* out = resynth_.output_buffer();
-            for (uint32_t i = 0; i < hop_size_; ++i)
-                output_ring_.write(out[i]);
+            resynth_.render(*snap, fft_, tonal, spread_.load(), coherence,
+                            input_block.data(), input_rms);
+        } else {
+            resynth_.render_passthrough(input_block.data(), hop_size_);
         }
+        const float* out = resynth_.output_buffer();
+        for (uint32_t i = 0; i < hop_size_; ++i)
+            output_ring_.write(out[i]);
 
         // 7. Visual state
         {
@@ -359,27 +370,10 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
     }
 }
 
-// ── Simulation Thread ────────────────────────────────────────────────
+// ── Simulation Thread (paused — SPECS_12 ownership TBD) ─────────────
 void SpectraMorphAudioProcessor::sim_thread_func() {
     while (running_) {
-        if (scheduler_.should_skip_simulation()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(4));
-            continue;
-        }
-
-        if (scheduler_.should_physics()) {
-            auto* snap = snapshots_.write_buffer();
-            for (uint32_t i = 0; i < snap->num_partials; ++i) {
-                auto& p = snap->partials[i];
-                p.energy *= 0.999f;
-                p.age += 1.0f;
-                if (p.energy < 0.001f || p.age > p.lifetime_remaining)
-                    p.state = ParticleState::Dying;
-            }
-            snapshots_.commit();
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 

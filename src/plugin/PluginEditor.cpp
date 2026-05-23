@@ -64,7 +64,7 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
 
     auto bounds = getLocalBounds().reduced(12);
     bounds.removeFromBottom(120);  // slider strip reserved in resized()
-    auto telemetry = bounds.removeFromTop(36).reduced(8, 10);
+    auto telemetry = bounds.removeFromTop(40).reduced(10, 12);
     auto viz_area = bounds.reduced(0, 4).toFloat();
 
     VisualState vs;
