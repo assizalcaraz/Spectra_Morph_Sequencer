@@ -35,15 +35,14 @@ public:
         add_buf_.from_snapshot(snap, sample_rate_);
         std::memset(output_buf_, 0, hop_size_ * sizeof(float));
 
-        if (add_buf_.num_active > 0)
-            render_additive(hop_size_);
+        // Always render additive (at a minimum floor to preserve tonal framework)
+        render_additive(hop_size_);
 
-        // Residual: fills gaps between partials (stronger when Tonal/Residual is up)
+        // Noise residual: shaped by input envelope, never passes original signal
         if (input_hop != nullptr && mag != nullptr && half_n > 0) {
-            const float residual_gain = (1.0f - tonal_gain) * (0.2f + coherence * 0.6f)
-                                      + tonal_gain * coherence * 0.08f;
-            if (residual_gain > 0.01f)
-                add_spectral_residual(input_hop, mag, half_n, residual_gain);
+            const float noise_gain = (1.0f - tonal_gain) * (0.3f + coherence * 0.5f);
+            if (noise_gain > 0.01f)
+                add_residual_noise(input_hop, noise_gain);
         }
 
         // Frame crossfade — reduced at high coherence to avoid smearing
@@ -84,7 +83,9 @@ private:
         const float two_pi = 2.0f * std::numbers::pi_v<float>;
         const float nyquist = sample_rate_ * 0.45f;
         // Hann-windowed FFT peak → sinusoid amplitude correction
-        const float amp_scale = tonal_gain_ * 4.0f / static_cast<float>(fft_size_);
+        // Floor: always keep at least 15% additive to preserve tonal framework
+        const float effective_gain = 0.15f + tonal_gain_ * 0.85f;
+        const float amp_scale = effective_gain * 4.0f / static_cast<float>(fft_size_);
 
         for (uint32_t i = 0; i < add_buf_.num_active; ++i) {
             const float detune = 1.0f + spread_ * static_cast<float>((static_cast<int>(i) % 7) - 3) * 0.015f;
@@ -106,13 +107,15 @@ private:
         }
     }
 
-    // Time-domain residual from input minus synthesis (OLA-friendly)
-    void add_spectral_residual(const float* input_hop, const float* /*mag*/,
-                               uint32_t /*half_n*/, float gain)
-    {
+    // Noise residual: shaped by input envelope, never passes original signal
+    void add_residual_noise(const float* input_hop, float gain) {
+        if (gain < 0.001f) return;
         for (uint32_t i = 0; i < hop_size_; ++i) {
-            const float diff = input_hop[i] - output_buf_[i];
-            output_buf_[i] += diff * gain;
+            noise_seed_ = noise_seed_ * 1103515245 + 12345;
+            float noise = (static_cast<float>(noise_seed_ & 0x7fffffff)
+                          * (1.0f / 536870912.0f)) - 1.0f;
+            float env = std::abs(input_hop[i]) * gain;
+            output_buf_[i] += noise * env * 0.5f;
         }
     }
 
@@ -122,6 +125,7 @@ private:
     float    tonal_gain_  = 1.0f;
     float    spread_      = 0.0f;
     float    coherence_   = 0.8f;
+    uint64_t noise_seed_  = 12345;
 
     AdditiveBuffer add_buf_;
     float output_buf_[RING_BUFFER_SIZE]  = {};

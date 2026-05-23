@@ -287,8 +287,9 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         if (coherence >= 0.85f && num_peaks > 1) {
+            const float tonal = 1.0f - tonal_residual_.load();
             const uint32_t peak_cap = static_cast<uint32_t>(
-                16.0f + density_val * 180.0f);
+                32.0f + density_val * 200.0f + tonal * 80.0f);
             num_peaks = std::min(num_peaks, peak_cap);
         }
 
