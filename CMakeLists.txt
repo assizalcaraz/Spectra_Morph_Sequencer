@@ -111,6 +111,7 @@ add_executable(SpectraMorph_tests
     tests/test_scheduler.cpp
     tests/test_resynthesis.cpp
     tests/test_phase2_validation.cpp
+    tests/test_fidelity.cpp
 )
 
 target_include_directories(SpectraMorph_tests
@@ -122,6 +123,8 @@ target_link_libraries(SpectraMorph_tests
     PRIVATE
         juce::juce_dsp
 )
+
+target_compile_options(SpectraMorph_tests PRIVATE -UNDEBUG)
 
 # ── Compiler flags ────────────────────────────────────────────────────
 if(APPLE)

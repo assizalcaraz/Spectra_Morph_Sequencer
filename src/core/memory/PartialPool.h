@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cassert>
 #include <utility>
+#include <algorithm>
 
 // SPECS_09 — Lock-free partial pool with bitmask allocation
 // All memory pre-allocated. No malloc in realtime.
@@ -88,7 +89,8 @@ public:
             }
         }
         if (out_idx > 0) {
-            snap.global_coherence = coherence_sum / static_cast<float>(out_idx);
+            snap.global_coherence = std::clamp(
+                coherence_sum / static_cast<float>(out_idx), 0.0f, 1.0f);
         }
     }
 

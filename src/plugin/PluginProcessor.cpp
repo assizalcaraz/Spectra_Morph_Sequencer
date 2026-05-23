@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 static juce::AudioProcessorValueTreeState::ParameterLayout create_params() {
     juce::AudioProcessorValueTreeState::ParameterLayout params;
@@ -87,6 +88,7 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
 
 void SpectraMorphAudioProcessor::releaseResources() {
     running_ = false;
+    sim_cv_.notify_all();
     if (dsp_thread_.joinable()) dsp_thread_.join();
     if (sim_thread_.joinable()) sim_thread_.join();
 }
@@ -114,13 +116,40 @@ TransientMode SpectraMorphAudioProcessor::transient_mode_for_coherence(
     return (coherence < 0.5f) ? TransientMode::Diffuse : TransientMode::Protect;
 }
 
-const ParticleSnapshot* SpectraMorphAudioProcessor::snapshot_for_resynth() const {
+void SpectraMorphAudioProcessor::merge_sim_into_pool() {
     const auto* sim = sim_snapshots_.read();
-    const auto* canon = snapshots_.read();
-    if (sim && canon && sim->num_partials > 0
-        && sim->frame_number == canon->frame_number)
-        return sim;
-    return canon;
+    if (!sim || sim->num_partials == 0 || sim->frame_number != frame_counter_)
+        return;
+
+    for (uint32_t si = 0; si < sim->num_partials; ++si) {
+        const auto& sp = sim->partials[si];
+        if (sp.amplitude < 1e-8f) continue;
+
+        uint32_t best = MAX_PARTIALS;
+        float best_df = 1e9f;
+        for (uint32_t pi = 0; pi < MAX_PARTIALS; ++pi) {
+            if (!pool_.is_alive(pi)) continue;
+            const float df = std::abs(pool_[pi].frequency - sp.frequency);
+            if (df < best_df) {
+                best_df = df;
+                best = pi;
+            }
+        }
+        if (best >= MAX_PARTIALS || best_df > 80.0f) continue;
+
+        auto& p = pool_[best];
+        p.frequency    = sp.frequency;
+        p.amplitude    = sp.amplitude;
+        p.spectral_pos = sp.spectral_pos;
+        p.velocity     = sp.velocity;
+    }
+}
+
+void SpectraMorphAudioProcessor::wait_for_sim_frame(uint32_t frame) {
+    std::unique_lock lock(sim_mutex_);
+    sim_cv_.wait_for(lock, std::chrono::milliseconds(8), [this, frame] {
+        return !running_ || sim_done_frame_.load() >= frame;
+    });
 }
 
 void SpectraMorphAudioProcessor::processBlock(
@@ -202,20 +231,31 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         float threshold = fft_.noise_floor() * birth_threshold_.load() + 0.001f;
         threshold *= 1.0f - coherence * 0.85f;
 
-        const float* mag   = fft_.magnitude();
-        const float* phase = fft_.phase();
+        const float* mag       = fft_.magnitude();
+        const float* phase     = fft_.phase();
+        const float* raw_phase = fft_.raw_phase();
+        float f0_score = 0.0f;
+
+        telemetry_flux_.store(fft_.spectral_flux());
+        telemetry_transient_.store(transient_strength);
 
         if (coherence >= 0.85f) {
-            f0 = PeakUtils::find_fundamental_hps(
-                mag, half_n, sr, fft_size_, threshold * 0.05f);
-            if (f0 < 40.0f)
+            const float hps_f0 = PeakUtils::find_fundamental_hps(
+                mag, half_n, sr, fft_size_, threshold * 0.05f, &f0_score);
+            if (hps_f0 >= 40.0f)
+                f0 = hps_f0;
+            else
                 f0 = PeakUtils::find_fundamental_bin(
                     mag, half_n, sr, fft_size_, threshold * 0.1f);
+
+            tracked_f0_ = PeakUtils::update_f0_ema(tracked_f0_, f0, f0_score);
+            if (tracked_f0_ >= 40.0f)
+                f0 = tracked_f0_;
 
             const bool odd_only = PeakUtils::prefer_odd_harmonics(
                 mag, f0, sr, fft_size_, half_n);
             PeakUtils::build_harmonic_peaks(
-                peaks, num_peaks, f0, mag, phase, sr, fft_size_, half_n,
+                peaks, num_peaks, f0, mag, raw_phase, sr, fft_size_, half_n,
                 odd_only, density_val, MAX_PEAKS);
         } else {
             for (uint32_t i = 1; i < half_n - 1 && num_peaks < MAX_PEAKS; ++i) {
@@ -254,19 +294,23 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             num_peaks = std::min(num_peaks, pool_cap);
         }
 
-        if (f0 >= 40.0f)
+        if (f0 >= 40.0f && tracked_f0_ < 40.0f)
             tracked_f0_ = f0;
+        telemetry_f0_.store(tracked_f0_);
 
         ++frame_counter_;
         tracker_.set_coherence(coherence);
+        tracker_.set_fundamental(tracked_f0_);
         const bool run_tracking = (coherence >= 0.85f)
             || scheduler_.tick(frame_counter_);
 
         if (run_tracking) {
             if (coherence >= 0.85f)
-                tracker_.sync_faithful(peaks, num_peaks, pool_, frame_counter_);
+                tracker_.sync_faithful(
+                    peaks, num_peaks, pool_, frame_counter_, tracked_f0_);
             else
-                tracker_.track(peaks, num_peaks, pool_, frame_counter_);
+                tracker_.track(
+                    peaks, num_peaks, pool_, frame_counter_, tracked_f0_);
 
             if (coherence < 0.85f) {
                 const uint32_t cap_user = 16u + static_cast<uint32_t>(
@@ -280,13 +324,28 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         {
+            auto* pre = snapshots_.write_buffer();
+            pool_.write_snapshot(*pre, frame_counter_);
+            snapshots_.commit();
+        }
+
+        {
+            std::lock_guard lock(sim_mutex_);
+            dsp_ready_frame_ = frame_counter_;
+            sim_done_frame_.store(0);
+        }
+        sim_cv_.notify_one();
+        wait_for_sim_frame(frame_counter_);
+        merge_sim_into_pool();
+
+        {
             auto* snap = snapshots_.write_buffer();
             pool_.write_snapshot(*snap, frame_counter_);
             PhaseManager::apply_to_snapshot(*snap, tracked_f0_, coherence, phase_seed_);
             snapshots_.commit();
         }
 
-        const auto* snap = snapshot_for_resynth();
+        const auto* snap = snapshots_.read();
         const float tonal = std::clamp(1.0f - tonal_residual_.load(), 0.0f, 1.0f);
         const TransientMode tmode = transient_mode_for_coherence(coherence);
 
@@ -334,8 +393,19 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
 
 void SpectraMorphAudioProcessor::sim_thread_func() {
     while (running_) {
+        uint32_t frame = 0;
+        {
+            std::unique_lock lock(sim_mutex_);
+            sim_cv_.wait(lock, [this] {
+                return !running_ || dsp_ready_frame_ != 0;
+            });
+            if (!running_) break;
+            frame = dsp_ready_frame_;
+            dsp_ready_frame_ = 0;
+        }
+
         const auto* canon = snapshots_.read();
-        if (canon && canon->num_partials > 0) {
+        if (canon && canon->frame_number == frame && canon->num_partials > 0) {
             SimParams params;
             params.gravity = gravity_.load();
             params.motion  = motion_.load();
@@ -344,9 +414,14 @@ void SpectraMorphAudioProcessor::sim_thread_func() {
 
             auto* out = sim_snapshots_.write_buffer();
             simulator_.step(*canon, *out, params, sim_rng_seed_);
+            out->frame_number = frame;
             sim_snapshots_.commit();
+            sim_done_frame_.store(frame);
+            sim_cv_.notify_all();
+        } else {
+            sim_done_frame_.store(frame);
+            sim_cv_.notify_all();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 

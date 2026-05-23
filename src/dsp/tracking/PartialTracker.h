@@ -4,6 +4,7 @@
 #include "../../core/types/Peak.h"
 #include "../../core/types/Types.h"
 #include "../../core/memory/PartialPool.h"
+#include "PeakUtils.h"
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
@@ -22,11 +23,14 @@ public:
         max_hold_frames_     = 3;
     }
 
+    void set_fundamental(float f0) { fundamental_f0_ = f0; }
+
     void track(const Peak* peaks, uint32_t num_peaks,
-               PartialPool& pool, uint32_t frame_counter)
+               PartialPool& pool, uint32_t frame_counter, float f0 = 0.0f)
     {
         births_ = 0;
         deaths_ = 0;
+        if (f0 >= 40.0f) fundamental_f0_ = f0;
 
         bool peak_used[MAX_PEAKS] = {};
         bool partial_used[MAX_PARTIALS] = {};
@@ -99,7 +103,8 @@ public:
             p.lifetime_remaining = 4.0f * sample_rate_ / hop_size_;
             p.stability          = 1.0f;
             p.coherence          = 1.0f;
-            p.harmonic_affinity  = 0.5f;
+            p.harmonic_affinity  = PeakUtils::compute_harmonic_affinity(
+                peak.frequency, fundamental_f0_);
             p.mass               = 1.0f;
             p.drift              = 0.0f;
             p.temperature        = 0.0f;
@@ -137,14 +142,14 @@ public:
 
     // Faithful mode: 1:1 tracking without pool reset (preserves phase / particle state)
     void sync_faithful(const Peak* peaks, uint32_t num_peaks,
-                       PartialPool& pool, uint32_t frame_counter)
+                       PartialPool& pool, uint32_t frame_counter, float f0 = 0.0f)
     {
         const float prev_coherence = coherence_;
         coherence_ = 1.0f;
         max_hold_frames_ = 24u;
         max_freq_deviation_ = 0.15f * (sample_rate_ / static_cast<float>(fft_size_));
         max_amp_deviation_  = 0.6f;
-        track(peaks, num_peaks, pool, frame_counter);
+        track(peaks, num_peaks, pool, frame_counter, f0);
         coherence_ = prev_coherence;
         set_coherence(prev_coherence);
     }
@@ -175,6 +180,8 @@ private:
             p.energy    = peak.magnitude * peak.magnitude;
             p.coherence = 1.0f;
             p.spectral_pos = std::log2(p.frequency / 20.0f);
+            p.harmonic_affinity = PeakUtils::compute_harmonic_affinity(
+                p.frequency, fundamental_f0_);
             return;
         }
 
@@ -196,8 +203,11 @@ private:
                     + peak.magnitude * (1.0f - smooth * 0.15f);
         p.phase     = peak.phase;
         p.energy    = peak.magnitude * peak.magnitude;
-        p.coherence = 1.0f - std::abs(delta) / std::numbers::pi_v<float>;
+        p.coherence = std::clamp(
+            1.0f - std::abs(delta) / std::numbers::pi_v<float>, 0.0f, 1.0f);
         p.spectral_pos = std::log2(p.frequency / 20.0f);
+        p.harmonic_affinity = PeakUtils::compute_harmonic_affinity(
+            p.frequency, fundamental_f0_);
     }
 
     float    sample_rate_        = 48000.0f;
@@ -210,4 +220,5 @@ private:
     uint32_t deaths_ = 0;
     float    coherence_ = 0.8f;
     float    transient_strength_ = 0.0f;
+    float    fundamental_f0_ = 0.0f;
 };

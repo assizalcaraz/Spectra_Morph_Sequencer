@@ -25,10 +25,10 @@ public:
         output = input;
         if (output.num_partials == 0) return;
 
-        const float G = params.gravity * 0.02f;
+        const float G = params.gravity * 0.06f;
         const float damping = 0.08f + params.decay * 0.12f;
-        const float thermal = params.motion * 0.015f;
-        const float repulsion = params.spread * 0.08f;
+        const float thermal = params.motion * 0.045f;
+        const float repulsion = params.spread * 0.22f;
         const float energy_decay = 1.0f - params.decay * 0.06f;
         const float amp_decay = 1.0f - params.decay * 0.04f;
 
@@ -47,7 +47,7 @@ public:
             p.velocity += noise * thermal * p.temperature;
 
             p.velocity *= (1.0f - damping);
-            p.spectral_pos += p.velocity * 0.05f;
+            p.spectral_pos += p.velocity * 0.14f;
             p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
             p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
 
@@ -64,8 +64,8 @@ public:
                 if (df < 1.0f && df > 1e-6f) {
                     const float push = repulsion / (df * df + 0.01f);
                     const float sign = (pi.spectral_pos >= pj.spectral_pos) ? 1.0f : -1.0f;
-                    pi.spectral_pos += push * sign * 0.001f;
-                    pj.spectral_pos -= push * sign * 0.001f;
+                    pi.spectral_pos += push * sign * 0.003f;
+                    pj.spectral_pos -= push * sign * 0.003f;
                 }
             }
         }

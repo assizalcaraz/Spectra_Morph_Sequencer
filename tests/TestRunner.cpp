@@ -33,6 +33,15 @@ int main(int argc, char** argv) {
     test_silence_floor();
     test_transient_detect();
 
+    extern void test_f0_sine_440();
+    extern void test_f0_triangle();
+    extern void test_harmonic_affinity();
+    extern void test_gravity_pull();
+    test_f0_sine_440();
+    test_f0_triangle();
+    test_harmonic_affinity();
+    test_gravity_pull();
+
     printf("\nAll tests passed.\n");
     return 0;
 }

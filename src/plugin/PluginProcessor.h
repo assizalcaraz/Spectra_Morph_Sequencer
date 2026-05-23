@@ -21,6 +21,8 @@
 
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <array>
 
 // ─── Parameter IDs ───────────────────────────────────────────────────
@@ -75,6 +77,10 @@ public:
     Scheduler& get_scheduler() { return scheduler_; }
     juce::AudioProcessorValueTreeState& get_apvts() { return apvts_; }
 
+    float telemetry_f0() const { return telemetry_f0_.load(); }
+    float telemetry_flux() const { return telemetry_flux_.load(); }
+    float telemetry_transient() const { return telemetry_transient_.load(); }
+
 private:
     std::thread dsp_thread_;
     std::thread sim_thread_;
@@ -83,7 +89,8 @@ private:
     void dsp_thread_func();
     void sim_thread_func();
     void syncParamsFromApvts();
-    const ParticleSnapshot* snapshot_for_resynth() const;
+    void merge_sim_into_pool();
+    void wait_for_sim_frame(uint32_t frame);
     TransientMode transient_mode_for_coherence(float coherence) const;
 
     FFTProcessor      fft_;
@@ -111,6 +118,15 @@ private:
     float             tracked_f0_    = 0.0f;
     uint64_t          phase_seed_    = 12345;
     uint64_t          sim_rng_seed_  = 54321;
+
+    std::mutex              sim_mutex_;
+    std::condition_variable sim_cv_;
+    uint32_t                dsp_ready_frame_ = 0;
+    std::atomic<uint32_t>   sim_done_frame_{0};
+
+    std::atomic<float> telemetry_f0_{0.0f};
+    std::atomic<float> telemetry_flux_{0.0f};
+    std::atomic<float> telemetry_transient_{0.0f};
 
     std::array<float, RING_BUFFER_SIZE> dry_delay_buf_{};
 
