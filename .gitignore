@@ -1,0 +1,25 @@
+# Build
+/build/
+cmake-build-*/
+*.o
+*.obj
+*.exe
+*.app
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# JUCE
+JuceLibraryCode/
+Binaries/
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Presets / user data (keep structure but ignore user presets)
+presets/user/
