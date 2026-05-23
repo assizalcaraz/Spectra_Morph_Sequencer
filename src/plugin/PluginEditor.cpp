@@ -62,17 +62,17 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
     g.fillAll(getLookAndFeel().findColour(
         juce::ResizableWindow::backgroundColourId));
 
-    auto area = getLocalBounds().toFloat().reduced(10, 10);
-    auto viz_area = area.withBottom(area.getBottom() - 140);
+    auto bounds = getLocalBounds().reduced(12);
+    bounds.removeFromBottom(120);  // slider strip reserved in resized()
+    auto telemetry = bounds.removeFromTop(28).reduced(4, 6);
+    auto viz_area = bounds.reduced(0, 4).toFloat();
 
     VisualState vs;
     bool has_data = processor_.read_visual(vs);
 
     if (has_data && vs.num_partials > 0) {
-        // Draw particles
         float h = viz_area.getHeight();
         float w = viz_area.getWidth();
-        float cx = viz_area.getCentreX();
         float cy = viz_area.getCentreY();
 
         for (uint32_t i = 0; i < vs.num_partials; ++i) {
@@ -89,28 +89,26 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
             g.fillEllipse(x - r, y - r, r * 2, r * 2);
         }
 
-        // Telemetry
-        g.setColour(juce::Colours::grey);
+        g.setFont(juce::FontOptions(13.0f));
+        g.setColour(juce::Colours::lightgrey);
         g.drawText("Partials: " + juce::String(vs.num_partials)
             + "  Births: " + juce::String(vs.births_this_frame)
             + "  Deaths: " + juce::String(vs.deaths_this_frame)
             + "  Coherence: " + juce::String(vs.global_coherence, 2)
             + "  CPU: " + juce::String(vs.cpu_load * 100.0f, 1) + "%",
-            viz_area.getX(), viz_area.getY() - 20,
-            viz_area.getWidth(), 20,
+            telemetry,
             juce::Justification::centredLeft);
     } else {
-        // No data — show idle message
         g.setColour(juce::Colours::darkgrey);
-        g.setFont(18.0f);
+        g.setFont(juce::FontOptions(18.0f));
         g.drawText("SpectraMorph — insert effect: processa el audio del track en tiempo real",
             viz_area.toNearestInt(),
             juce::Justification::centred);
 
-        g.setFont(14.0f);
+        g.setFont(juce::FontOptions(14.0f));
         g.drawText("Ajusta los parámetros para esculpir la materia espectral",
-            viz_area.getX(), viz_area.getCentreY() + 30,
-            viz_area.getWidth(), 20,
+            viz_area.getX(), viz_area.getCentreY() + 30.0f,
+            viz_area.getWidth(), 20.0f,
             juce::Justification::centred);
     }
 }

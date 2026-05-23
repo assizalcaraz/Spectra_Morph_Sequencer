@@ -1,6 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace {
     constexpr double MIN_FREQ = 20.0;
 
@@ -94,10 +97,54 @@ void SpectraMorphAudioProcessor::releaseResources() {
     if (sim_thread_.joinable()) sim_thread_.join();
 }
 
+void SpectraMorphAudioProcessor::syncParamsFromApvts() {
+    auto read = [this](const char* id) {
+        return apvts_.getRawParameterValue(id)->load();
+    };
+
+    dry_wet_.store(read(ParamID::DryWet));
+    coherence_chaos_.store(read(ParamID::CoherenceChaos));
+    density_.store(read(ParamID::Density));
+    tonal_residual_.store(read(ParamID::TonalResidual));
+    gravity_.store(read(ParamID::Gravity));
+    motion_.store(read(ParamID::Motion));
+    decay_.store(read(ParamID::Decay));
+    spread_.store(read(ParamID::Spread));
+    birth_threshold_.store(read(ParamID::BirthThreshold));
+    max_partials_.store(read(ParamID::MaxPartials));
+}
+
+void SpectraMorphAudioProcessor::applyParticleEffects() {
+    const float decay   = decay_.load();
+    const float gravity = gravity_.load();
+    const float motion  = motion_.load();
+    const float chaos   = coherence_chaos_.load();
+    const float energy_decay = 0.9998f - decay * 0.035f;
+
+    for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
+        if (!pool_.is_alive(i)) continue;
+
+        auto& p = pool_[i];
+        p.energy *= energy_decay;
+        p.amplitude *= 0.985f + (1.0f - decay) * 0.015f;
+
+        const float pull = (5.0f - p.spectral_pos) * gravity * 0.001f;
+        p.velocity += (chaos - 0.5f) * motion * 0.05f;
+        p.spectral_pos += pull + p.velocity * motion * 0.02f;
+        p.spectral_pos = std::clamp(p.spectral_pos, 0.0f, LOG_OCTAVES);
+        p.frequency = 20.0f * std::pow(2.0f, p.spectral_pos);
+
+        p.coherence *= 1.0f - chaos * 0.003f;
+        if (p.coherence < 0.05f) p.coherence = 0.05f;
+    }
+}
+
 void SpectraMorphAudioProcessor::processBlock(
     juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+    syncParamsFromApvts();
+
     int ns = buffer.getNumSamples();
     int nc = buffer.getNumChannels();
     float mix = dry_wet_.load();
@@ -167,16 +214,27 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             }
         }
 
-        // 3. Update params from atomic cache
-        float density_val = density_.load();
-        birth_threshold_.store(
-            apvts_.getRawParameterValue(ParamID::BirthThreshold)->load());
+        // Density: keep only the strongest peaks
+        const float density_val = density_.load();
+        if (num_peaks > 1) {
+            std::sort(peaks, peaks + num_peaks,
+                [](const Peak& a, const Peak& b) {
+                    return a.magnitude > b.magnitude;
+                });
+            const uint32_t peak_cap = static_cast<uint32_t>(4.0f + density_val * 120.0f);
+            num_peaks = std::min(num_peaks, std::max(4u, peak_cap));
+        }
 
         // 4. Partial tracking (cadenced)
         ++frame_counter_;
+        tracker_.set_coherence_chaos(coherence_chaos_.load());
         if (scheduler_.tick(frame_counter_)) {
             tracker_.track(peaks, num_peaks, pool_, frame_counter_);
-            scheduler_.enforce_budget(pool_);
+            applyParticleEffects();
+
+            const uint32_t user_cap = 16u + static_cast<uint32_t>(
+                max_partials_.load() * static_cast<float>(MAX_PARTIALS - 16));
+            pool_.prune_to(std::min(user_cap, scheduler_.max_partials()));
         }
 
         // 5. Write snapshot
@@ -189,7 +247,8 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         // 6. Resynthesis
         const auto* snap = snapshots_.read();
         if (snap && snap->num_partials > 0) {
-            resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_);
+            resynth_.render(*snap, static_cast<float>(sample_rate_), hop_size_,
+                            tonal_residual_.load(), spread_.load());
             const float* out = resynth_.output_buffer();
             for (uint32_t i = 0; i < hop_size_; ++i)
                 output_ring_.write(out[i]);

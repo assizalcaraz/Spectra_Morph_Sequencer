@@ -21,10 +21,13 @@ public:
     }
 
     void render(const ParticleSnapshot& snap, float sample_rate,
-                uint32_t hop_size)
+                uint32_t hop_size, float tonal_gain = 1.0f,
+                float spread = 0.0f)
     {
         sample_rate_ = sample_rate;
         hop_size_    = hop_size;
+        tonal_gain_  = tonal_gain;
+        spread_      = spread;
 
         add_buf_.from_snapshot(snap, sample_rate_);
         std::memset(output_buf_, 0, hop_size_ * sizeof(float));
@@ -52,7 +55,8 @@ private:
         float nyquist = sample_rate_ * 0.45f;
 
         for (uint32_t i = 0; i < add_buf_.num_active; ++i) {
-            float freq = add_buf_.freq[i];
+            float detune = 1.0f + spread_ * static_cast<float>((i % 7) - 3) * 0.015f;
+            float freq = add_buf_.freq[i] * detune;
             float amp  = add_buf_.amp[i];
             float& ph  = add_buf_.phase[i];
             float env  = add_buf_.env[i];
@@ -70,7 +74,7 @@ private:
         }
 
         if (add_buf_.num_active > 0) {
-            float scale = 1.0f / static_cast<float>(add_buf_.num_active);
+            float scale = tonal_gain_ / static_cast<float>(add_buf_.num_active);
             for (uint32_t i = 0; i < hop_size; ++i)
                 output_buf_[i] *= scale;
         }
@@ -78,6 +82,8 @@ private:
 
     float    sample_rate_ = 48000.0f;
     uint32_t hop_size_    = 512;
+    float    tonal_gain_  = 1.0f;
+    float    spread_      = 0.0f;
 
     AdditiveBuffer add_buf_;
     float output_buf_[RING_BUFFER_SIZE]  = {};

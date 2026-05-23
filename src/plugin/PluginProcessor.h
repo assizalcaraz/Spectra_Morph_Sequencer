@@ -86,6 +86,8 @@ private:
 
     void dsp_thread_func();
     void sim_thread_func();
+    void syncParamsFromApvts();
+    void applyParticleEffects();
 
     // ── DSP pipeline ───────────────────────────────────────────────
     FFTProcessor      fft_;

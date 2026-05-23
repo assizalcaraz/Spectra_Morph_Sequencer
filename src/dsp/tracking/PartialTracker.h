@@ -135,6 +135,8 @@ public:
     uint32_t births() const { return births_; }
     uint32_t deaths() const { return deaths_; }
 
+    void set_coherence_chaos(float v) { coherence_chaos_ = v; }
+
 private:
     void update_partial(Partial& p, const Peak& peak, bool was_continuous) {
         const float two_pi = 2.0f * std::numbers::pi_v<float>;
@@ -148,8 +150,11 @@ private:
         float inst_freq = p.frequency
                         + delta * sample_rate_ / (two_pi * hop_size_);
 
-        // Smooth updates
-        float smooth = was_continuous ? 0.3f : 0.7f;
+        // Smooth updates — chaos reduces tracking smoothness
+        float chaos = coherence_chaos_;
+        float smooth = was_continuous
+            ? (0.15f + chaos * 0.55f)
+            : (0.35f + chaos * 0.55f);
         p.frequency    = p.frequency * (1.0f - smooth) + inst_freq * smooth;
         p.amplitude    = peak.magnitude;
         p.phase        = peak.phase;
@@ -166,4 +171,5 @@ private:
 
     uint32_t births_ = 0;
     uint32_t deaths_ = 0;
+    float    coherence_chaos_ = 0.2f;
 };
