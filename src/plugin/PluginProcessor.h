@@ -114,7 +114,6 @@ private:
     uint32_t          hop_size_      = 512;
     uint32_t          fft_size_      = 2048;
     uint32_t          dry_latency_samples_ = 1536;
-    uint32_t          dry_delay_write_ = 0;
     float             tracked_f0_    = 0.0f;
     uint64_t          phase_seed_    = 12345;
     uint64_t          sim_rng_seed_  = 54321;
@@ -128,7 +127,8 @@ private:
     std::atomic<float> telemetry_flux_{0.0f};
     std::atomic<float> telemetry_transient_{0.0f};
 
-    std::array<float, RING_BUFFER_SIZE> dry_delay_buf_{};
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None>
+        dry_delay_line_;
 
     std::atomic<float> coherence_chaos_{0.2f};
     std::atomic<float> density_{0.5f};

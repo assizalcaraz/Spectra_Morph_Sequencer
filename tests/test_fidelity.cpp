@@ -57,6 +57,37 @@ void test_f0_sine_440() {
     printf("OK (f0=%.1f Hz)\n", tracked_f0);
 }
 
+void test_f0_sine_187() {
+    printf("  f0_sine_187: ");
+    constexpr uint32_t N = 2048;
+    constexpr uint32_t H = 512;
+    constexpr float SR = 48000.0f;
+
+    FFTProcessor fft;
+    fft.prepare(N, H, SR);
+
+    constexpr uint32_t BUF = N * 8;
+    std::vector<float> frame(BUF, 0.0f);
+    fill_sine(frame.data(), BUF, 187.5f, SR, 0.5f);
+
+    float tracked_f0 = 0.0f;
+    for (int f = 0; f < 32; ++f) {
+        std::vector<float> hop(H);
+        const uint32_t offset = (static_cast<uint32_t>(f) * H) % (BUF - H);
+        for (uint32_t i = 0; i < H; ++i)
+            hop[i] = frame[offset + i];
+
+        fft.process(hop.data());
+        float score = 0.0f;
+        const float cand = PeakUtils::find_fundamental_hps(
+            fft.magnitude(), fft.half_n(), SR, N, 0.001f, &score);
+        tracked_f0 = PeakUtils::update_f0_ema(tracked_f0, cand, score);
+    }
+
+    assert(tracked_f0 >= 175.0f && tracked_f0 <= 200.0f);
+    printf("OK (f0=%.1f Hz)\n", tracked_f0);
+}
+
 void test_f0_triangle() {
     printf("  f0_triangle: ");
     constexpr uint32_t N = 2048;

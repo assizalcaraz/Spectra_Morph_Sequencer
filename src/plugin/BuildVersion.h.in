@@ -1,0 +1,12 @@
+#pragma once
+
+// Generated at configure time — do not edit by hand.
+#define SM_VERSION_STRING "@PROJECT_VERSION@"
+#define SM_BUILD_TAG "@SM_BUILD_TAG@"
+#define SM_GIT_SHA "@SM_GIT_SHA@"
+
+namespace sm::build {
+inline constexpr const char* version   = SM_VERSION_STRING;
+inline constexpr const char* tag       = SM_BUILD_TAG;
+inline constexpr const char* git_sha   = SM_GIT_SHA;
+} // namespace sm::build

@@ -225,7 +225,7 @@ inline float find_fundamental_hps(const float* mag, uint32_t half_n,
             const float hf = final_f0 * static_cast<float>(h);
             if (hf > nyquist) break;
             const float hm = magnitude_at(hf, mag, sample_rate, fft_size, half_n);
-            if (hm > boost_mag * 1.03f) {
+            if (hm > boost_mag * 1.12f) {
                 boost_mag = hm;
                 boost = h;
             }
@@ -238,6 +238,17 @@ inline float find_fundamental_hps(const float* mag, uint32_t half_n,
     }
     final_score = harmonic_score(
         final_f0, mag, half_n, sample_rate, fft_size);
+
+    const float strongest = find_fundamental_bin(
+        mag, half_n, sample_rate, fft_size, threshold * 0.05f);
+    if (strongest >= 40.0f) {
+        const float ratio = final_f0 / strongest;
+        if (ratio > 1.35f || ratio < 0.72f) {
+            final_f0 = strongest;
+            final_score = harmonic_score(
+                final_f0, mag, half_n, sample_rate, fft_size);
+        }
+    }
 
     if (out_score) *out_score = final_score;
     return final_f0;

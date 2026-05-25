@@ -84,7 +84,8 @@ public:
         for (uint32_t i = 0; i < MAX_PARTIALS; ++i) {
             if (is_alive(i)) {
                 snap.partials[out_idx++] = partials_[i];
-                coherence_sum += partials_[i].coherence;
+                coherence_sum += std::clamp(
+                    partials_[i].coherence, 0.0f, 1.0f);
                 snap.total_energy += partials_[i].energy;
             }
         }

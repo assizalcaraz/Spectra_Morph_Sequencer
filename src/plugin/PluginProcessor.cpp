@@ -12,11 +12,12 @@ static juce::AudioProcessorValueTreeState::ParameterLayout create_params() {
     auto add_float = [&](const char* id, const char* name,
                           float min, float max, float def) {
         params.add(std::make_unique<juce::AudioParameterFloat>(
-            id, name,
+            juce::ParameterID { id, 1 },
+            name,
             juce::NormalisableRange<float>(min, max, 0.01f), def));
     };
 
-    add_float(ParamID::CoherenceChaos, "Coherence ↔ Chaos", 0.0f, 1.0f, 0.2f);
+    add_float(ParamID::CoherenceChaos, "Coherence / Chaos", 0.0f, 1.0f, 0.2f);
     add_float(ParamID::Density,        "Density",            0.0f, 1.0f, 0.5f);
     add_float(ParamID::TonalResidual, "Tonal / Residual",   0.0f, 1.0f, 0.3f);
     add_float(ParamID::Gravity,        "Gravity",            0.0f, 10.0f, 1.0f);
@@ -49,7 +50,13 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
     block_size_  = static_cast<uint32_t>(blockSize);
     fft_size_    = 2048;
     hop_size_    = fft_size_ / 4;
-    dry_latency_samples_ = fft_size_ / 2 + hop_size_;
+    dry_latency_samples_ = hop_size_ + fft_size_ / 2;
+    setLatencySamples(static_cast<int>(dry_latency_samples_));
+
+    dry_delay_line_.setMaximumDelayInSamples(
+        static_cast<int>(dry_latency_samples_) + 64);
+    dry_delay_line_.prepare({ sampleRate, static_cast<uint32_t>(blockSize), 1u });
+    dry_delay_line_.setDelay(static_cast<float>(dry_latency_samples_));
 
     scheduler_.set_audio_params(static_cast<float>(sample_rate_), hop_size_);
 
@@ -64,8 +71,7 @@ void SpectraMorphAudioProcessor::prepareToPlay(double sampleRate, int blockSize)
     input_ring_.clear();
     output_ring_.clear();
     visual_queue_.clear();
-    dry_delay_buf_.fill(0.0f);
-    dry_delay_write_ = 0;
+    dry_delay_line_.reset();
     scheduler_.reset();
     frame_counter_ = 0;
     tracked_f0_ = 0.0f;
@@ -117,6 +123,11 @@ TransientMode SpectraMorphAudioProcessor::transient_mode_for_coherence(
 }
 
 void SpectraMorphAudioProcessor::merge_sim_into_pool() {
+    const float sim_strength = gravity_.load() + motion_.load()
+                             + decay_.load() + spread_.load();
+    if (sim_strength < 0.02f)
+        return;
+
     const auto* sim = sim_snapshots_.read();
     if (!sim || sim->num_partials == 0 || sim->frame_number != frame_counter_)
         return;
@@ -171,22 +182,18 @@ void SpectraMorphAudioProcessor::processBlock(
             mono += buffer.getReadPointer(ch)[i];
         mono /= static_cast<float>(nc);
 
-        dry_delay_buf_[dry_delay_write_ % RING_BUFFER_SIZE] = mono;
         input_ring_.write(mono);
 
-        const uint32_t read_idx = (dry_delay_write_ + RING_BUFFER_SIZE
-                                   - dry_latency_samples_) % RING_BUFFER_SIZE;
-        const float dry = dry_delay_buf_[read_idx];
+        dry_delay_line_.pushSample(0, mono);
+        const float dry = dry_delay_line_.popSample(0);
 
         float wet = 0.0f;
         output_ring_.read(wet);
 
-        for (int ch = 0; ch < nc; ++ch) {
-            auto* out = buffer.getWritePointer(ch);
-            out[i] = dry * (1.0f - mix) + wet * mix;
-        }
+        const float sample = dry * (1.0f - mix) + wet * mix;
 
-        ++dry_delay_write_;
+        for (int ch = 0; ch < nc; ++ch)
+            buffer.getWritePointer(ch)[i] = sample;
     }
 }
 
@@ -205,6 +212,11 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         if (!got_data) {
+            resynth_.render_silent_hop(hop_size_);
+            const float* out = resynth_.output_buffer();
+            for (uint32_t i = 0; i < hop_size_; ++i)
+                output_ring_.write(out[i]);
+
             scheduler_.end_frame();
             scheduler_.update_pressure();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -289,8 +301,9 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         }
 
         if (coherence >= 0.85f && num_peaks > 1) {
-            const uint32_t pool_cap = 2u + static_cast<uint32_t>(
-                density_val * static_cast<float>(MAX_PARTIALS - 2));
+            const uint32_t pool_cap = std::max(16u,
+                2u + static_cast<uint32_t>(
+                    density_val * static_cast<float>(MAX_PARTIALS - 2)));
             num_peaks = std::min(num_peaks, pool_cap);
         }
 
@@ -323,20 +336,26 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
             }
         }
 
+        const float sim_strength = gravity_.load() + motion_.load()
+                                 + decay_.load() + spread_.load();
+        const bool run_sim = (sim_strength >= 0.02f);
+
         {
             auto* pre = snapshots_.write_buffer();
             pool_.write_snapshot(*pre, frame_counter_);
             snapshots_.commit();
         }
 
-        {
-            std::lock_guard lock(sim_mutex_);
-            dsp_ready_frame_ = frame_counter_;
-            sim_done_frame_.store(0);
+        if (run_sim) {
+            {
+                std::lock_guard lock(sim_mutex_);
+                dsp_ready_frame_ = frame_counter_;
+                sim_done_frame_.store(0);
+                sim_cv_.notify_one();
+            }
+            wait_for_sim_frame(frame_counter_);
+            merge_sim_into_pool();
         }
-        sim_cv_.notify_one();
-        wait_for_sim_frame(frame_counter_);
-        merge_sim_into_pool();
 
         {
             auto* snap = snapshots_.write_buffer();
@@ -349,12 +368,13 @@ void SpectraMorphAudioProcessor::dsp_thread_func() {
         const float tonal = std::clamp(1.0f - tonal_residual_.load(), 0.0f, 1.0f);
         const TransientMode tmode = transient_mode_for_coherence(coherence);
 
+        const float mix = dry_wet_.load();
         if (snap && snap->num_partials > 0) {
             resynth_.render(*snap, fft_, tonal, spread_.load(), coherence,
                             transient_strength, tmode, tracked_f0_,
-                            input_block.data(), input_rms);
+                            input_block.data(), input_rms, mix);
         } else {
-            resynth_.render_passthrough(input_block.data(), hop_size_);
+            resynth_.render_silent_hop(hop_size_);
         }
 
         const float* out = resynth_.output_buffer();

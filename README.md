@@ -38,9 +38,8 @@ Arquitectura 4 threads:
 ## Compilar
 
 ```bash
-cmake -B build \
-  -DCMAKE_C_COMPILE_OBJECT="<CMAKE_C_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"
-cmake --build build --parallel
+cmake -S . -B build
+cmake --build build --parallel 2>&1 | tail -15
 ```
 
 Requiere: CMake 3.22+, macOS 13.0+, AppleClang, conexión a GitHub (FetchContent descarga JUCE).

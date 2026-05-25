@@ -26,7 +26,6 @@ struct alignas(32) AdditiveBuffer {
         std::memset(active_mask, 0, sizeof(active_mask));
 
         const float env_samples = sample_rate_ * 0.003f;
-        const float env_step = (hop_size_ > 1.0f) ? (1.0f / env_samples) : 1.0f;
 
         for (uint32_t i = 0; i < num_active; ++i) {
             const auto& p = snap.partials[i];

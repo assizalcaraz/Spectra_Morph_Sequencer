@@ -26,7 +26,8 @@ public:
     void set_fundamental(float f0) { fundamental_f0_ = f0; }
 
     void track(const Peak* peaks, uint32_t num_peaks,
-               PartialPool& pool, uint32_t frame_counter, float f0 = 0.0f)
+               PartialPool& pool, uint32_t frame_counter, float f0 = 0.0f,
+               bool cull_unmatched = false)
     {
         births_ = 0;
         deaths_ = 0;
@@ -115,6 +116,7 @@ public:
             p.state              = ParticleState::Alive;
             p.niche              = Niche::None;
             p.hold_counter       = 0;
+            partial_used[id]     = true;
             ++births_;
         }
 
@@ -124,6 +126,22 @@ public:
 
             auto& p = pool[i];
             if (p.state == ParticleState::Dead) continue;
+
+            if (cull_unmatched) {
+                bool orphan = true;
+                for (uint32_t p_idx = 0; p_idx < num_peaks; ++p_idx) {
+                    if (std::abs(p.frequency - peaks[p_idx].frequency)
+                        < max_freq_deviation_ * 2.5f) {
+                        orphan = false;
+                        break;
+                    }
+                }
+                if (orphan) {
+                    pool.free(i);
+                    ++deaths_;
+                }
+                continue;
+            }
 
             p.age += 1.0f;
             p.energy *= 0.9995f;
@@ -149,7 +167,7 @@ public:
         max_hold_frames_ = 24u;
         max_freq_deviation_ = 0.15f * (sample_rate_ / static_cast<float>(fft_size_));
         max_amp_deviation_  = 0.6f;
-        track(peaks, num_peaks, pool, frame_counter, f0);
+        track(peaks, num_peaks, pool, frame_counter, f0, true);
         coherence_ = prev_coherence;
         set_coherence(prev_coherence);
     }

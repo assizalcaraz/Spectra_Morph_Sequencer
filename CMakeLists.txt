@@ -1,22 +1,56 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(SpectraMorph
-    VERSION 0.1.0
+    VERSION 0.1.1
     LANGUAGES CXX
     DESCRIPTION "Spectral Particle Instrument"
 )
 
+set(SM_BUILD_TAG "fidelity-daw-r5")
+
+find_package(Git QUIET)
+set(SM_GIT_SHA "nogit")
+if(Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE SM_GIT_SHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/BuildVersion.h.in
+    ${CMAKE_BINARY_DIR}/generated/BuildVersion.h
+    @ONLY
+)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET 13.0)
 
+# Standalone: abrir UI sin Reaper (lldb / Xcode). Desactivar: -DSM_ENABLE_STANDALONE=OFF
+option(SM_ENABLE_STANDALONE "Build Standalone app for offline debugging" ON)
+if(SM_ENABLE_STANDALONE)
+    set(SM_PLUGIN_FORMATS VST3 AU Standalone)
+else()
+    set(SM_PLUGIN_FORMATS VST3 AU)
+endif()
+
 # ── JUCE ──────────────────────────────────────────────────────────────
-include(FetchContent)
-FetchContent_Declare(JUCE
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG master
-)
-FetchContent_MakeAvailable(JUCE)
+# Local install: cmake -DJUCE_PATH=/ruta/a/JUCE ...
+if(JUCE_PATH AND EXISTS "${JUCE_PATH}/CMakeLists.txt")
+    add_subdirectory(${JUCE_PATH} ${CMAKE_BINARY_DIR}/juce-build EXCLUDE_FROM_ALL)
+else()
+    include(FetchContent)
+    set(FETCHCONTENT_UPDATES_DISCONNECTED JUCE ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG master
+        UPDATE_DISCONNECTED 1
+    )
+    FetchContent_MakeAvailable(JUCE)
+endif()
 
 # ── Source groups ─────────────────────────────────────────────────────
 set(CORE_SOURCES
@@ -66,7 +100,7 @@ juce_add_plugin(SpectraMorph
     VERSION "${PROJECT_VERSION}"
     DESCRIPTION "${PROJECT_DESCRIPTION}"
 
-    FORMATS VST3 AU
+    FORMATS ${SM_PLUGIN_FORMATS}
 
     VST2_COPY_AUTOMATION OFF
 
@@ -97,11 +131,14 @@ add_compile_definitions(
 target_link_libraries(SpectraMorph
     PRIVATE
         juce::juce_dsp
+        juce::juce_audio_utils
+        juce::juce_audio_devices
 )
 
 target_include_directories(SpectraMorph
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
 )
 
 # ── Test target ───────────────────────────────────────────────────────
@@ -117,6 +154,7 @@ add_executable(SpectraMorph_tests
 target_include_directories(SpectraMorph_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
 )
 
 target_link_libraries(SpectraMorph_tests

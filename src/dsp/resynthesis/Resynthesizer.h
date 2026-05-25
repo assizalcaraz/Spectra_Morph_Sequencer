@@ -31,7 +31,8 @@ public:
     void render(const ParticleSnapshot& snap, FFTProcessor& fft,
                 float tonal_gain, float spread, float coherence,
                 float transient_strength, TransientMode transient_mode,
-                float f0, const float* input_hop, float input_rms)
+                float f0, const float* input_hop, float input_rms,
+                float dry_wet_mix = 1.0f)
     {
         const float* mag       = fft.magnitude();
         const float* phase     = fft.phase();
@@ -53,6 +54,9 @@ public:
         float residual_mix = residual_knob
             * (0.15f + (1.0f - coherence_) * 0.55f)
             + tonal_gain_ * coherence_ * 0.05f;
+
+        const float wet_amt = std::clamp(dry_wet_mix, 0.0f, 1.0f);
+        residual_mix *= wet_amt;
 
         if (transient_strength_ > 0.3f)
             residual_mix *= (1.0f - transient_strength_ * 0.85f);
@@ -97,20 +101,15 @@ public:
             }
         }
 
-        if (transient_strength_ > 0.3f && input_hop != nullptr
-            && transient_mode_ == TransientMode::Protect) {
-            const float w = transient_strength_;
-            for (uint32_t i = 0; i < hop_size_; ++i)
-                output_buf_[i] = output_buf_[i] * (1.0f - w) + input_hop[i] * w;
-        }
-
         std::memcpy(prev_output_, output_buf_, hop_size_ * sizeof(float));
+        juce::ignoreUnused(input_hop, transient_mode);
     }
 
-    void render_passthrough(const float* input_hop, uint32_t hop_size) {
+    // Advance OLA without injecting the dry input (avoids bleed at 100% wet).
+    void render_silent_hop(uint32_t hop_size) {
         hop_size_ = hop_size;
-        for (uint32_t i = 0; i < hop_size; ++i)
-            output_buf_[i] = input_hop[i];
+        std::memset(grain_buf_.data(), 0, grain_buf_.size() * sizeof(float));
+        ola_synthesize(grain_buf_.data(), fft_size_, hop_size);
     }
 
     const float* output_buffer() const { return output_buf_; }

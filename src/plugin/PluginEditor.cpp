@@ -1,5 +1,24 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "BuildVersion.h"
+#include <algorithm>
+
+namespace {
+
+juce::String build_version_label() {
+    return juce::String("v") + sm::build::version
+         + " | " + sm::build::tag
+         + " | " + sm::build::git_sha;
+}
+
+void paint_version_badge(juce::Graphics& g, juce::Rectangle<int> area) {
+    g.setFont(juce::FontOptions(11.0f));
+    g.setColour(juce::Colours::orange.withAlpha(0.92f));
+    g.drawText(build_version_label(), area,
+               juce::Justification::centredRight);
+}
+
+} // namespace
 
 SpectraMorphAudioProcessorEditor::SpectraMorphAudioProcessorEditor(
     SpectraMorphAudioProcessor& p)
@@ -29,7 +48,7 @@ SpectraMorphAudioProcessorEditor::SpectraMorphAudioProcessorEditor(
         s.setup(name);
         addAndMakeVisible(s.slider);
     };
-    add(coherence_,      "Coherence↔Chaos");
+    add(coherence_,      "Coherence/Chaos");
     add(density_,        "Density");
     add(tonal_residual_, "Tonal/Residual");
     add(gravity_,        "Gravity");
@@ -64,6 +83,8 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
 
     auto bounds = getLocalBounds().reduced(12);
     bounds.removeFromBottom(120);  // slider strip reserved in resized()
+    auto version_bar = bounds.removeFromTop(18);
+    paint_version_badge(g, version_bar.reduced(4, 0));
     auto telemetry = bounds.removeFromTop(40).reduced(10, 12);
     auto viz_area = bounds.reduced(0, 4).toFloat();
 
@@ -101,19 +122,21 @@ void SpectraMorphAudioProcessorEditor::paint(juce::Graphics& g) {
             + "  transient: " + juce::String(processor_.telemetry_transient(), 2)
             + "  Mode: " + juce::String(mode_coherence, 2)
             + "  Density: " + juce::String(density, 2)
-            + "  Phase lock: " + juce::String(vs.global_coherence, 2)
+            + "  Phase lock: " + juce::String(
+                std::max(0.0f, vs.global_coherence), 2)
             + "  CPU: " + juce::String(vs.cpu_load * 100.0f, 1) + "%",
             telemetry,
             juce::Justification::centredLeft);
     } else {
         g.setColour(juce::Colours::darkgrey);
         g.setFont(juce::FontOptions(18.0f));
-        g.drawText("SpectraMorph — insert effect: processa el audio del track en tiempo real",
+        g.drawText("SpectraMorph " + build_version_label()
+            + " - insert effect: processa el audio del track en tiempo real",
             viz_area.toNearestInt(),
             juce::Justification::centred);
 
         g.setFont(juce::FontOptions(14.0f));
-        g.drawText("Ajusta los parámetros para esculpir la materia espectral",
+        g.drawText("Ajusta los parametros para esculpir la materia espectral",
             viz_area.getX(), viz_area.getCentreY() + 30.0f,
             viz_area.getWidth(), 20.0f,
             juce::Justification::centred);
