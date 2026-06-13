@@ -121,6 +121,18 @@ public:
     const float* magnitude()   const { return mag_.data(); }
     const float* phase()       const { return phase_.data(); }
     const float* raw_phase()   const { return raw_phase_.data(); }
+
+    void override_spectrum(const float* mag, const float* phase,
+                           const float* raw_phase = nullptr)
+    {
+        const uint32_t n = half_n_ + 1;
+        if (mag)
+            std::memcpy(mag_.data(), mag, n * sizeof(float));
+        if (phase)
+            std::memcpy(phase_.data(), phase, n * sizeof(float));
+        if (raw_phase)
+            std::memcpy(raw_phase_.data(), raw_phase, n * sizeof(float));
+    }
     const float* noise_floor_bins() const { return noise_floor_bins_.data(); }
 
     uint32_t fft_size()    const { return fft_size_; }

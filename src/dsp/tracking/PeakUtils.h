@@ -1,9 +1,12 @@
 #pragma once
 
 #include "../../core/types/Peak.h"
+#include "../../core/types/Snapshot.h"
 #include "../../core/types/Types.h"
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <cstring>
 
 namespace PeakUtils {
 
@@ -354,22 +357,23 @@ inline bool prefer_odd_harmonics(const float* mag, float f0,
     return odd_sum > even_sum * 1.8f;
 }
 
-// High-coherence path: one partial per harmonic; density scales count and floor
+// High-coherence path: one partial per harmonic; depth = harmonic range, density = pruning
 inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
                                   float f0, const float* mag, const float* phase,
                                   float sample_rate, uint32_t fft_size,
                                   uint32_t half_n, bool odd_only,
-                                  float density, uint32_t max_peaks)
+                                  float density, float depth, uint32_t max_peaks)
 {
     num_peaks = 0;
     if (f0 < 40.0f) return;
 
     density = std::clamp(density, 0.0f, 1.0f);
+    depth   = std::clamp(depth, 0.0f, 1.0f);
 
     const float nyquist = sample_rate * 0.45f;
     const int max_h_full = std::max(1, static_cast<int>(nyquist / f0));
     const int max_h = std::max(1, static_cast<int>(std::round(
-        static_cast<float>(max_h_full) * (0.06f + density * 0.94f))));
+        static_cast<float>(max_h_full) * (0.06f + depth * 0.94f))));
     const float bin_hz = sample_rate / static_cast<float>(fft_size);
 
     float peak_mag = 0.0f;
@@ -421,6 +425,62 @@ inline void build_harmonic_peaks(Peak* peaks, uint32_t& num_peaks,
             });
         num_peaks = hard_cap;
     }
+}
+
+inline float semitones_to_ratio(float semitones) {
+    return std::pow(2.0f, semitones / 12.0f);
+}
+
+// Resample magnitude/phase bins by pitch ratio (ratio > 1 = shift up).
+inline void shift_spectrum(float* mag, float* phase, float* raw_phase,
+                           uint32_t half_n, float ratio)
+{
+    ratio = std::clamp(ratio, 0.25f, 4.0f);
+    if (std::abs(ratio - 1.0f) < 0.001f)
+        return;
+
+    std::vector<float> tm(half_n), tp(half_n), tr(half_n);
+    std::memcpy(tm.data(), mag, half_n * sizeof(float));
+    std::memcpy(tp.data(), phase, half_n * sizeof(float));
+    if (raw_phase)
+        std::memcpy(tr.data(), raw_phase, half_n * sizeof(float));
+
+    std::memset(mag, 0, half_n * sizeof(float));
+    std::memset(phase, 0, half_n * sizeof(float));
+    if (raw_phase)
+        std::memset(raw_phase, 0, half_n * sizeof(float));
+
+    mag[0] = tm[0];
+    phase[0] = tp[0];
+    if (raw_phase)
+        raw_phase[0] = tr[0];
+
+    for (uint32_t k = 1; k < half_n; ++k) {
+        const float src = static_cast<float>(k) / ratio;
+        if (src < 1.0f || src >= static_cast<float>(half_n - 1))
+            continue;
+
+        const int k0 = static_cast<int>(src);
+        const float frac = src - static_cast<float>(k0);
+        const float m = tm[static_cast<uint32_t>(k0)] * (1.0f - frac)
+                      + tm[static_cast<uint32_t>(k0 + 1)] * frac;
+        const float p = tp[static_cast<uint32_t>(k0)] * (1.0f - frac)
+                      + tp[static_cast<uint32_t>(k0 + 1)] * frac;
+        mag[k] = m;
+        phase[k] = p;
+        if (raw_phase) {
+            const float r = tr[static_cast<uint32_t>(k0)] * (1.0f - frac)
+                          + tr[static_cast<uint32_t>(k0 + 1)] * frac;
+            raw_phase[k] = r;
+        }
+    }
+}
+
+inline void apply_pitch_to_snapshot(ParticleSnapshot& snap, float ratio) {
+    if (std::abs(ratio - 1.0f) < 0.001f)
+        return;
+    for (uint32_t i = 0; i < snap.num_partials; ++i)
+        snap.partials[i].frequency *= ratio;
 }
 
 } // namespace PeakUtils

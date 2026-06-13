@@ -80,7 +80,7 @@ void test_harmonic_count_triangle() {
     uint32_t num_peaks = 0;
     PeakUtils::build_harmonic_peaks(
         peaks, num_peaks, F0, mag.data(), phase.data(),
-        SR, N, half_n, false, 1.0f, MAX_PEAKS);
+        SR, N, half_n, false, 1.0f, 1.0f, MAX_PEAKS);
 
     assert(num_peaks >= 8);
 
@@ -142,12 +142,12 @@ void test_density_scales_harmonics() {
     uint32_t num_sparse = 0;
     PeakUtils::build_harmonic_peaks(
         peaks, num_sparse, F0, mag.data(), phase.data(),
-        SR, N, half_n, false, 0.0f, MAX_PEAKS);
+        SR, N, half_n, false, 0.0f, 1.0f, MAX_PEAKS);
 
     uint32_t num_dense = 0;
     PeakUtils::build_harmonic_peaks(
         peaks, num_dense, F0, mag.data(), phase.data(),
-        SR, N, half_n, false, 1.0f, MAX_PEAKS);
+        SR, N, half_n, false, 1.0f, 1.0f, MAX_PEAKS);
 
     assert(num_sparse <= 4u);
     assert(num_dense >= 12u);

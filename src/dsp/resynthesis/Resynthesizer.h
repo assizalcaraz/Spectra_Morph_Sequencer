@@ -25,14 +25,22 @@ public:
         std::memset(ola_sum_.data(), 0, ola_sum_.size() * sizeof(float));
         std::memset(ola_norm_.data(), 0, ola_norm_.size() * sizeof(float));
         std::memset(grain_buf_.data(), 0, grain_buf_.size() * sizeof(float));
+        std::memset(additive_hop_.data(), 0, additive_hop_.size() * sizeof(float));
+        std::memset(ola_sum_.data(), 0, ola_sum_.size() * sizeof(float));
+        std::memset(ola_norm_.data(), 0, ola_norm_.size() * sizeof(float));
+        std::memset(prev_output_, 0, sizeof(prev_output_));
         phase_seed_ = 12345;
+    }
+
+    void flush() {
+        prepare(sample_rate_, fft_size_, hop_size_);
     }
 
     void render(const ParticleSnapshot& snap, FFTProcessor& fft,
                 float tonal_gain, float spread, float coherence,
                 float transient_strength, TransientMode transient_mode,
                 float f0, const float* input_hop, float input_rms,
-                float dry_wet_mix = 1.0f)
+                float dry_wet_mix = 1.0f, float temporal_scramble = 0.0f)
     {
         const float* mag       = fft.magnitude();
         const float* phase     = fft.phase();
@@ -50,15 +58,22 @@ public:
         add_buf_.from_snapshot(snap, sample_rate_, hop_size_);
         render_additive(hop_size_, fft.window_gain());
 
-        float residual_knob = 1.0f - tonal_gain_;
-        float residual_mix = residual_knob
-            * (0.15f + (1.0f - coherence_) * 0.55f)
-            + tonal_gain_ * coherence_ * 0.05f;
+        const float scramble = std::clamp(temporal_scramble, 0.0f, 1.0f);
+
+        const float residual_knob = 1.0f - tonal_gain_;
+        float residual_mix;
+        if (coherence_ >= 0.85f) {
+            residual_mix = residual_knob * 0.6f
+                         + (1.0f - tonal_gain_) * 0.2f;
+        } else {
+            residual_mix = residual_knob * (0.35f + (1.0f - coherence_) * 0.45f)
+                         + tonal_gain_ * (1.0f - coherence_) * 0.08f;
+        }
 
         const float wet_amt = std::clamp(dry_wet_mix, 0.0f, 1.0f);
         residual_mix *= wet_amt;
 
-        if (transient_strength_ > 0.3f)
+        if (transient_strength_ > 0.3f && coherence_ < 0.85f)
             residual_mix *= (1.0f - transient_strength_ * 0.85f);
 
         if (residual_mix > 0.01f && mag != nullptr) {
@@ -72,10 +87,12 @@ public:
                 grain_buf_[i] *= residual_mix;
         }
 
-        for (uint32_t i = 0; i < hop_size_; ++i)
-            grain_buf_[i] += output_buf_[i];
-
         ola_synthesize(grain_buf_.data(), fft_size_, hop_size_);
+
+        if (scramble > 0.01f || coherence_ < 0.95f)
+            apply_hop_grain_window(additive_hop_.data(), hop_size_);
+        for (uint32_t i = 0; i < hop_size_; ++i)
+            output_buf_[i] += additive_hop_[i];
 
         if (input_rms > 0.001f) {
             float sum_sq = 0.0f;
@@ -83,22 +100,33 @@ public:
                 sum_sq += output_buf_[i] * output_buf_[i];
             const float out_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
             if (out_rms > 0.0001f) {
-                const float g = std::clamp(input_rms / out_rms, 0.25f, 4.0f);
+                const float g = std::clamp(input_rms / out_rms, 0.25f, 2.0f);
                 for (uint32_t i = 0; i < hop_size_; ++i)
                     output_buf_[i] *= g;
             }
         }
 
-        const bool skip_xfade = (coherence_ >= 0.9f) || (transient_strength_ > 0.3f);
-        if (!skip_xfade && coherence_ < 0.9f) {
-            const float xfade = (1.0f - coherence_) * 0.4f;
-            const float pi = std::numbers::pi_v<float>;
-            for (uint32_t i = 0; i < hop_size_; ++i) {
-                const float fade_in = 0.5f * (1.0f - std::cos(
-                    pi * static_cast<float>(i) / static_cast<float>(hop_size_)));
-                output_buf_[i] = output_buf_[i] * (1.0f - xfade + fade_in * xfade)
-                               + prev_output_[i] * (1.0f - fade_in) * xfade;
-            }
+        float peak = 0.0f;
+        for (uint32_t i = 0; i < hop_size_; ++i)
+            peak = std::max(peak, std::abs(output_buf_[i]));
+        if (peak > 0.95f) {
+            const float g = 0.95f / peak;
+            for (uint32_t i = 0; i < hop_size_; ++i)
+                output_buf_[i] *= g;
+        }
+
+        const float xfade = std::clamp(
+            (scramble > 0.01f ? 0.58f : (coherence_ >= 0.95f ? 0.28f : 0.38f))
+            + (1.0f - coherence_) * 0.22f + scramble * 0.22f, 0.28f, 0.92f);
+
+        const float xfade_eff = (transient_strength_ > 0.3f && scramble <= 0.05f)
+            ? xfade * 0.65f : xfade;
+        const float pi = std::numbers::pi_v<float>;
+        for (uint32_t i = 0; i < hop_size_; ++i) {
+            const float fade_in = 0.5f * (1.0f - std::cos(
+                pi * static_cast<float>(i) / static_cast<float>(hop_size_)));
+            output_buf_[i] = output_buf_[i] * (1.0f - xfade_eff + fade_in * xfade_eff)
+                           + prev_output_[i] * (1.0f - fade_in) * xfade_eff;
         }
 
         std::memcpy(prev_output_, output_buf_, hop_size_ * sizeof(float));
@@ -115,6 +143,16 @@ public:
     const float* output_buffer() const { return output_buf_; }
 
 private:
+    static void apply_hop_grain_window(float* buf, uint32_t hop) {
+        if (hop <= 1) return;
+        const float pi = std::numbers::pi_v<float>;
+        for (uint32_t i = 0; i < hop; ++i) {
+            const float w = 0.5f * (1.0f - std::cos(
+                2.0f * pi * static_cast<float>(i) / static_cast<float>(hop - 1)));
+            buf[i] *= w;
+        }
+    }
+
     void render_additive(uint32_t hop_size, float window_gain) {
         const float two_pi = 2.0f * std::numbers::pi_v<float>;
         const float nyquist = sample_rate_ * 0.45f;
@@ -125,7 +163,7 @@ private:
         const PhaseMode mode = PhaseManager::mode_from_coherence(coherence_);
         const float chaos = 1.0f - coherence_;
 
-        std::memset(output_buf_, 0, sizeof(output_buf_));
+        std::memset(additive_hop_.data(), 0, hop_size * sizeof(float));
 
         float phi_f0 = add_buf_.num_active > 0 ? add_buf_.phase[0] : 0.0f;
         if (f0_ >= 40.0f) {
@@ -165,7 +203,7 @@ private:
             const float phase_inc = two_pi * freq / sample_rate_;
 
             for (uint32_t s = 0; s < hop_size; ++s) {
-                output_buf_[s] += amp * env * std::sin(ph);
+                additive_hop_[s] += amp * env * std::sin(ph);
                 ph += phase_inc;
                 if (ph > two_pi) ph -= two_pi;
             }
@@ -209,6 +247,7 @@ private:
     ResidualSynth  residual_;
 
     std::array<float, RING_BUFFER_SIZE> grain_buf_{};
+    std::array<float, RING_BUFFER_SIZE> additive_hop_{};
     std::array<float, RING_BUFFER_SIZE> ola_sum_{};
     std::array<float, RING_BUFFER_SIZE> ola_norm_{};
     float output_buf_[RING_BUFFER_SIZE]  = {};

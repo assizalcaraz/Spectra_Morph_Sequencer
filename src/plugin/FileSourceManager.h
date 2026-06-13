@@ -5,6 +5,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 // Load mono audio file + segment selection (Granular_Synth-style).
@@ -56,6 +57,46 @@ public:
         updateSegmentIndices();
     }
 
+    // Move selection preserving length (delta in normalized file coordinates).
+    void moveSegmentNormalized(float delta) {
+        const float len = seg_end_norm_ - seg_start_norm_;
+        if (len <= 0.0f) return;
+        float ns = std::clamp(seg_start_norm_ + delta, 0.0f, 1.0f - len);
+        setSegmentNormalized(ns, ns + len);
+    }
+
+    // Shift by N windows (each window = current segment length). Wraps to start at EOF.
+    bool shiftSegmentByWindows(int steps) {
+        if (!hasFile() || steps == 0) return false;
+        const juce::int64 n = totalSamples();
+        const juce::int64 len = segmentLengthSamples();
+        if (len <= 0 || len >= n) return false;
+
+        const juce::int64 old_start = seg_start_sample_;
+        const juce::int64 old_end = seg_end_sample_;
+
+        juce::int64 ns = seg_start_sample_ + static_cast<juce::int64>(steps) * len;
+        juce::int64 ne = ns + len;
+
+        if (steps > 0 && ne > n)
+            ns = 0, ne = len;
+        else if (steps < 0 && ns < 0) {
+            ns = std::max(juce::int64{0}, n - len);
+            ne = ns + len;
+        }
+
+        const juce::int64 max_start = std::max(juce::int64{0}, n - 1);
+        seg_start_norm_ = (max_start > 0)
+            ? static_cast<float>(ns) / static_cast<float>(max_start) : 0.0f;
+        seg_end_norm_ = static_cast<float>(ne) / static_cast<float>(n);
+        updateSegmentIndices();
+        return seg_start_sample_ != old_start || seg_end_sample_ != old_end;
+    }
+
+    float segmentLengthNorm() const {
+        return std::max(0.0f, seg_end_norm_ - seg_start_norm_);
+    }
+
     float segmentStartNorm() const { return seg_start_norm_; }
     float segmentEndNorm()   const { return seg_end_norm_; }
 
@@ -82,14 +123,21 @@ public:
 
     juce::int64 playhead() const { return playhead_.load(); }
 
-    bool readBlock(int num_samples, float* dest, bool loop_segment) {
+    bool readBlock(int num_samples, float* dest, bool loop_in_place,
+                   const std::function<bool()>& on_advance = {})
+    {
         if (!hasFile() || num_samples <= 0 || !dest)
             return false;
 
         juce::int64 pos = playhead_.load();
         for (int i = 0; i < num_samples; ++i) {
             if (pos >= seg_end_sample_) {
-                if (loop_segment)
+                bool continued = false;
+                if (on_advance && on_advance())
+                    continued = true;
+                else if (loop_in_place || on_advance)
+                    continued = true;
+                if (continued)
                     pos = seg_start_sample_;
                 else {
                     dest[i] = 0.0f;

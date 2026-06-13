@@ -10,14 +10,17 @@ Plugin de audio VST3 / AU / Standalone para macOS.
 - 4 hilos: Audio / DSP / Simulation / UI
 - Uso en Reaper como **inserto** en un track
 
-### Etapa 2 — File Granular (nuevo)
+### Etapa 2 — File Granular
 - Carga **WAV** (u otros formatos soportados por JUCE)
-- Selector de **segmento** con waveform (drag inicio/fin)
+- Selector de **segmento** con waveform (drag, zoom, marquee)
+- **Grilla de patrón** por ventanas: pasos on/off, **Pat** + **Seq** para loop con saltos
+- **Secuenciador de ventanas** con crossfade configurable (`Win Xfade`)
+- **Pitch spread** por voz (Spread Min/Max) + **BPM**, **Tap** y **Snap 1/4**
 - **Play** preview RT (archivo → `processBlock` → DSP)
 - **Export WAV** del segmento procesado
 - **TemporalScrambler**: permutación de frames STFT + bin scatter según Coherence/Chaos
 - FFT **4096** opcional (Spectral Quality = High)
-- Física de simulación desactivada en este modo
+- Física de simulación de partículas desactivada en este modo; **visualización espectral** (partials del tracker) sí visible en la UI
 
 Tag UI esperado: `v0.2.0 · granular-file-r6 · <git-sha>`
 
@@ -36,16 +39,24 @@ Tag UI esperado: `v0.2.0 · granular-file-r6 · <git-sha>`
 
 1. Abrir SpectraMorph **Standalone** (o VST con UI)
 2. Modo: **File Granular**
-3. **Load WAV** → arrastrar handles de segmento en la waveform
-4. Ajustar Coherence/Chaos, Fragment ms, Bin Scatter, Seed
-5. **Play** para preview (Dry/Wet según knob)
-6. **Export WAV** para guardar el resultado
+3. **Load WAV** → arrastrar handles de segmento en la waveform (zoom con rueda o botones)
+4. Ajustar Coherence/Chaos, Fragment ms, Time Scatter, Grains, Bin Scatter, Seed
+5. Opcional: activar **Pat** + **Seq**, editar pasos en la grilla bajo la waveform, **Tap**/ **Snap 1/4** para BPM
+6. **Play** para preview (Dry/Wet según knob)
+7. **Export WAV** para guardar el resultado
+
+### UI
+- Zona superior: transporte, zoom, **Seq** / **Pat**, Tap / Snap / BPM
+- Centro: waveform + grilla de pasos alineada al archivo
+- Inferior: **simulación espectral** (partials) con rotativos transparentes encima
+- Crédito: **4ssiiz** (esquina superior izquierda)
 
 ## Cómo usar — Live Insert
 
 1. Insertar en un track, modo **Live Insert**
 2. Reproducir audio del track
-3. Ajustar knobs (Gravity/Motion activan simulación)
+3. Ajustar knobs (Gravity/Motion activan simulación de partículas)
+4. La visualización de partials/simulación aparece en la zona inferior de controles
 
 ## Compilar
 
@@ -70,7 +81,7 @@ cmake --build build --target SpectraMorph_tests
 ./build/SpectraMorph_tests
 ```
 
-Incluye: `scrambler_identity`, `scrambler_chaos`, `file_segment_bounds` + suite previa.
+Incluye: `scrambler_identity`, `scrambler_chaos`, `file_segment_bounds`, `window_pattern`, `tempo_utils`, `pitch_spread` + suite previa.
 
 ## Documentación
 

@@ -32,17 +32,31 @@ namespace ParamID {
     inline constexpr const char* ProcessMode       = "process_mode";
     inline constexpr const char* CoherenceChaos    = "coherence_chaos";
     inline constexpr const char* Density           = "density";
+    inline constexpr const char* HarmonicDepth     = "harmonic_depth";
+    inline constexpr const char* PitchShift        = "pitch_shift";
     inline constexpr const char* TonalResidual       = "tonal_residual";
     inline constexpr const char* Gravity             = "gravity";
     inline constexpr const char* Motion              = "motion";
     inline constexpr const char* Decay               = "decay";
     inline constexpr const char* Spread              = "spread";
     inline constexpr const char* DryWet              = "dry_wet";
+    inline constexpr const char* InputGain           = "input_gain";
+    inline constexpr const char* OutputGain          = "output_gain";
     inline constexpr const char* MaxPartials         = "max_partials";
     inline constexpr const char* BirthThreshold      = "birth_threshold";
     inline constexpr const char* SegmentStart        = "segment_start";
     inline constexpr const char* SegmentEnd          = "segment_end";
+    inline constexpr const char* WindowSequencer      = "window_sequencer";
+    inline constexpr const char* PatternEnabled       = "pattern_enabled";
+    inline constexpr const char* PatternMask          = "pattern_mask";
+    inline constexpr const char* PatternPlayMode      = "pattern_play_mode";
+    inline constexpr const char* WindowXfadeMs        = "window_xfade_ms";
+    inline constexpr const char* PitchSpreadMin       = "pitch_spread_min";
+    inline constexpr const char* PitchSpreadMax       = "pitch_spread_max";
+    inline constexpr const char* Bpm                  = "bpm";
     inline constexpr const char* TemporalFragmentMs  = "temporal_fragment_ms";
+    inline constexpr const char* TemporalScramble    = "temporal_scramble";
+    inline constexpr const char* GrainVoices         = "grain_voices";
     inline constexpr const char* BinScatter          = "bin_scatter";
     inline constexpr const char* RandomSeed          = "random_seed";
     inline constexpr const char* SpectralQuality     = "spectral_quality";
@@ -91,6 +105,7 @@ public:
         return telemetry_scramble_read_.load();
     }
     uint32_t telemetry_frame_store() const {
+        std::lock_guard lock(frame_store_mutex_);
         return frame_store_.num_frames();
     }
 
@@ -104,8 +119,32 @@ public:
     void setFilePlaying(bool play);
     bool isFilePlaying() const { return file_playing_.load(); }
     bool renderSegmentToFile(const juce::File& dest, juce::String& error);
+    void setFileSegmentNormalized(float start, float end);
+    bool shiftFileSegmentByWindows(int steps);
+    bool advanceFileSegmentWindow();
+    void registerTapTempo();
+    void snapSegmentQuarterNote();
+
+    uint32_t patternStepCount() const;
+    int patternStepIndex() const { return pattern_step_index_; }
+    uint32_t patternMask() const;
+    void setPatternStepActive(int step, bool active);
+    void jumpPatternStep(int step);
+    void setPatternStepIndex(int step) { pattern_step_index_ = step; }
 
 private:
+    struct SegmentCrossfade {
+        bool active = false;
+        uint32_t pos = 0;
+        uint32_t len = 0;
+        std::vector<float> tail;
+    };
+
+    void beginWindowCrossfade();
+    void applyPendingDspReset();
+    void captureFileSample(float s);
+    uint32_t patternStepCountUnlocked() const;
+
     std::thread dsp_thread_;
     std::thread sim_thread_;
     std::atomic<bool> running_{false};
@@ -122,6 +161,8 @@ private:
     void syncFileSegmentFromApvts();
     uint32_t framesPerFragment() const;
     uint64_t scrambleSeed() const;
+    uint32_t computeDryDelaySamples() const;
+    void updateDryDelayCompensation();
 
     FFTProcessor      fft_;
     PartialTracker    tracker_;
@@ -138,11 +179,19 @@ private:
     VisualRingBuffer  visual_queue_;
 
     SpectralFrameStore frame_store_;
+    mutable std::mutex frame_store_mutex_;
     FileSourceManager  file_source_;
 
     std::vector<float> work_mag_;
     std::vector<float> work_phase_;
     std::vector<float> work_raw_phase_;
+    std::vector<float> voice_mag_;
+    std::vector<float> voice_phase_;
+    std::vector<float> voice_raw_phase_;
+    std::vector<float> voice_acc_re_;
+    std::vector<float> voice_acc_im_;
+    std::vector<float> prev_work_mag_;
+    bool               prev_work_valid_ = false;
 
     Scheduler         scheduler_;
     uint32_t          frame_counter_ = 0;
@@ -169,26 +218,51 @@ private:
     std::atomic<bool> file_exporting_{false};
     std::atomic<bool> non_realtime_render_{false};
 
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None>
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>
         dry_delay_line_;
 
-    std::atomic<float> coherence_chaos_{0.2f};
-    std::atomic<float> density_{0.5f};
-    std::atomic<float> tonal_residual_{0.7f};
-    std::atomic<float> gravity_{1.0f};
-    std::atomic<float> motion_{0.3f};
-    std::atomic<float> decay_{0.5f};
-    std::atomic<float> spread_{0.5f};
-    std::atomic<float> dry_wet_{0.5f};
+    std::atomic<float> coherence_chaos_{0.0f};
+    std::atomic<float> density_{1.0f};
+    std::atomic<float> harmonic_depth_{1.0f};
+    std::atomic<float> pitch_shift_{0.0f};
+    std::atomic<float> tonal_residual_{0.15f};
+    std::atomic<float> gravity_{0.0f};
+    std::atomic<float> motion_{0.0f};
+    std::atomic<float> decay_{0.0f};
+    std::atomic<float> spread_{0.0f};
+    std::atomic<float> dry_wet_{1.0f};
+    std::atomic<float> input_gain_lin_{1.0f};
+    std::atomic<float> output_gain_lin_{1.0f};
     std::atomic<float> birth_threshold_{0.1f};
-    std::atomic<float> max_partials_{0.5f};
+    std::atomic<float> max_partials_{0.75f};
     std::atomic<float> segment_start_{0.0f};
     std::atomic<float> segment_end_{1.0f};
+    std::atomic<float> window_sequencer_{0.0f};
+    std::atomic<float> pattern_enabled_{0.0f};
+    std::atomic<uint32_t> pattern_mask_{0xFFFFFFFFu};
+    std::atomic<float> window_xfade_ms_{75.0f};
+    std::atomic<float> pitch_spread_min_{0.0f};
+    std::atomic<float> pitch_spread_max_{0.0f};
+    std::atomic<float> bpm_{120.0f};
     std::atomic<float> temporal_fragment_ms_{80.0f};
+    std::atomic<float> temporal_scramble_{0.0f};
+    std::atomic<float> grain_voices_{1.0f};
     std::atomic<float> bin_scatter_{0.0f};
     std::atomic<float> random_seed_{42.0f};
     std::atomic<float> spectral_quality_{0.0f};
     std::atomic<float> export_normalize_{1.0f};
+
+    float last_wet_{0.0f};
+    float dry_delay_current_{1536.0f};
+    bool  wet_primed_{false};
+
+    static constexpr uint32_t kDryDelayHopHeadroom = 8;
+
+    int pattern_step_index_ = 0;
+    SegmentCrossfade segment_xfade_;
+    std::vector<float> file_tail_capture_;
+    std::atomic<bool> pending_dsp_reset_{false};
+    std::vector<double> tap_times_sec_;
 
     juce::AudioProcessorValueTreeState apvts_;
 

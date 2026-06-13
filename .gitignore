@@ -1,6 +1,9 @@
 # Build
 /build/
+/build-xcode/
 cmake-build-*/
+BUILD_RESULT.txt
+GIT_BUILD_RESULT.txt
 *.o
 *.obj
 *.exe
@@ -9,6 +12,7 @@ cmake-build-*/
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~

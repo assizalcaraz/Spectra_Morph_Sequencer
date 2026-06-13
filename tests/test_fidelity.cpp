@@ -135,7 +135,7 @@ void test_f0_triangle() {
     uint32_t num_peaks = 0;
     PeakUtils::build_harmonic_peaks(
         peaks, num_peaks, 400.0f, mag.data(), phase.data(),
-        SR, N, half_n, true, 1.0f, MAX_PEAKS);
+        SR, N, half_n, true, 1.0f, 1.0f, MAX_PEAKS);
 
     assert(num_peaks >= 12u);
     printf("OK (f0=%.0f Hz, peaks=%u)\n", tracked_f0, num_peaks);
@@ -175,7 +175,7 @@ void test_harmonic_affinity() {
 
         PeakUtils::build_harmonic_peaks(
             peaks, num_peaks, tracked_f0, fft.magnitude(), fft.raw_phase(),
-            SR, N, fft.half_n(), false, 1.0f, MAX_PEAKS);
+            SR, N, fft.half_n(), false, 1.0f, 1.0f, MAX_PEAKS);
 
         tracker.sync_faithful(
             peaks, num_peaks, pool, static_cast<uint32_t>(f + 1), tracked_f0);

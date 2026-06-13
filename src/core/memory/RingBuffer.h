@@ -25,6 +25,19 @@ public:
         return true;
     }
 
+    // Drop oldest sample when full (keeps stream live under overload).
+    void writeForce(const T& value) {
+        uint32_t current_write = write_pos_.load(std::memory_order_relaxed);
+        uint32_t current_read  = read_pos_.load(std::memory_order_acquire);
+        uint32_t next_write    = (current_write + 1) % Capacity;
+
+        if (next_write == current_read)
+            read_pos_.store((current_read + 1) % Capacity, std::memory_order_release);
+
+        buffer_[current_write] = value;
+        write_pos_.store(next_write, std::memory_order_release);
+    }
+
     bool read(T& value) {
         uint32_t current_read  = read_pos_.load(std::memory_order_relaxed);
         uint32_t current_write = write_pos_.load(std::memory_order_acquire);

@@ -33,6 +33,9 @@ int main(int argc, char** argv) {
     test_silence_floor();
     test_transient_detect();
 
+    extern void test_triangle_rms_ratio();
+    test_triangle_rms_ratio();
+
     extern void test_f0_sine_440();
     extern void test_f0_sine_187();
     extern void test_f0_triangle();
@@ -46,10 +49,21 @@ int main(int argc, char** argv) {
 
     extern void test_scrambler_identity();
     extern void test_scrambler_chaos();
+    extern void test_scrambler_voice_count();
+    extern void test_scrambler_voice_mix();
     extern void test_file_segment_bounds();
     test_scrambler_identity();
     test_scrambler_chaos();
+    test_scrambler_voice_count();
+    test_scrambler_voice_mix();
     test_file_segment_bounds();
+
+    extern void test_window_pattern();
+    extern void test_tempo_utils();
+    extern void test_pitch_spread();
+    test_window_pattern();
+    test_tempo_utils();
+    test_pitch_spread();
 
     printf("\nAll tests passed.\n");
     return 0;

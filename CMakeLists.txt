@@ -153,8 +153,12 @@ add_executable(SpectraMorph_tests
     tests/test_resynthesis.cpp
     tests/test_phase2_validation.cpp
     tests/test_fidelity.cpp
+    tests/test_triangle_resynth.cpp
     tests/test_scramble.cpp
     tests/test_file_segment.cpp
+    tests/test_window_pattern.cpp
+    tests/test_tempo_utils.cpp
+    tests/test_pitch_spread.cpp
 )
 
 target_include_directories(SpectraMorph_tests

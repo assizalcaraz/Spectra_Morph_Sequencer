@@ -10,6 +10,8 @@
 
 // SPECS_07 — Tonal magnitude subtraction + residual spectrum
 
+constexpr float kTonalSubtractAlpha = 0.85f;
+
 class ResidualSynth {
 public:
     void prepare(uint32_t fft_size, uint32_t half_n) {
@@ -49,8 +51,9 @@ public:
         const bool use_raw = transient_strength > 0.3f;
 
         for (uint32_t k = 0; k < half_n_; ++k) {
-            residual_mag_[k] = input_mag[k] > tonal_mag_[k]
-                ? input_mag[k] - tonal_mag_[k]
+            const float tonal_est = tonal_mag_[k] * kTonalSubtractAlpha;
+            residual_mag_[k] = input_mag[k] > tonal_est
+                ? input_mag[k] - tonal_est
                 : 0.0f;
 
             if (use_raw && raw_phase != nullptr)
