@@ -3,6 +3,10 @@
 Resíntesis espectral híbrida (tonal + residual) con partículas espectrales autónomas.
 Plugin de audio VST3 / AU / Standalone para macOS.
 
+![SpectraMorph — File Granular v0.2](docs/screenshot-ui.png)
+
+*Modo File Granular: waveform con grilla de pasos, secuenciador Pat/Seq y visualización espectral bajo los controles.*
+
 ## Estado — v0.2.0 (Etapa 2)
 
 ### Etapa 1 — Live Insert
