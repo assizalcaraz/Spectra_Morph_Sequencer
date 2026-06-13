@@ -152,6 +152,17 @@ public:
             return 0;
 
         num_voices = voice_count(num_voices, scramble);
+
+        const bool identity = scramble <= 0.01f
+                           && bin_scatter <= 0.01f
+                           && num_voices <= 1u
+                           && voice_pitch_ratios == nullptr;
+        if (identity) {
+            const uint32_t idx = write_idx >= n_frames ? n_frames - 1u : write_idx;
+            store.copy_frame(idx, out_mag, out_phase, out_raw_phase);
+            return idx;
+        }
+
         std::memset(acc_re, 0, half_bins * sizeof(float));
         std::memset(acc_im, 0, half_bins * sizeof(float));
 

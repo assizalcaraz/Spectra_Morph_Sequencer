@@ -10,7 +10,7 @@
 
 // SPECS_07 — Tonal magnitude subtraction + residual spectrum
 
-constexpr float kTonalSubtractAlpha = 0.85f;
+constexpr float kTonalSubtractAlpha = 0.78f;
 
 class ResidualSynth {
 public:

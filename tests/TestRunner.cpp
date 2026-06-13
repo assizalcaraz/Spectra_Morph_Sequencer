@@ -51,11 +51,13 @@ int main(int argc, char** argv) {
     extern void test_scrambler_chaos();
     extern void test_scrambler_voice_count();
     extern void test_scrambler_voice_mix();
+    extern void test_scrambler_passthrough();
     extern void test_file_segment_bounds();
     test_scrambler_identity();
     test_scrambler_chaos();
     test_scrambler_voice_count();
     test_scrambler_voice_mix();
+    test_scrambler_passthrough();
     test_file_segment_bounds();
 
     extern void test_window_pattern();

@@ -63,8 +63,8 @@ public:
         const float residual_knob = 1.0f - tonal_gain_;
         float residual_mix;
         if (coherence_ >= 0.85f) {
-            residual_mix = residual_knob * 0.6f
-                         + (1.0f - tonal_gain_) * 0.2f;
+            residual_mix = residual_knob * 0.78f
+                         + (1.0f - tonal_gain_) * 0.28f;
         } else {
             residual_mix = residual_knob * (0.35f + (1.0f - coherence_) * 0.45f)
                          + tonal_gain_ * (1.0f - coherence_) * 0.08f;
@@ -89,7 +89,7 @@ public:
 
         ola_synthesize(grain_buf_.data(), fft_size_, hop_size_);
 
-        if (scramble > 0.01f || coherence_ < 0.95f)
+        if (scramble > 0.01f || coherence_ < 0.90f)
             apply_hop_grain_window(additive_hop_.data(), hop_size_);
         for (uint32_t i = 0; i < hop_size_; ++i)
             output_buf_[i] += additive_hop_[i];
@@ -100,7 +100,9 @@ public:
                 sum_sq += output_buf_[i] * output_buf_[i];
             const float out_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
             if (out_rms > 0.0001f) {
-                const float g = std::clamp(input_rms / out_rms, 0.25f, 2.0f);
+                const float max_gain = (coherence_ >= 0.85f && scramble <= 0.01f)
+                    ? 3.0f : 2.0f;
+                const float g = std::clamp(input_rms / out_rms, 0.25f, max_gain);
                 for (uint32_t i = 0; i < hop_size_; ++i)
                     output_buf_[i] *= g;
             }
@@ -116,8 +118,10 @@ public:
         }
 
         const float xfade = std::clamp(
-            (scramble > 0.01f ? 0.58f : (coherence_ >= 0.95f ? 0.28f : 0.38f))
-            + (1.0f - coherence_) * 0.22f + scramble * 0.22f, 0.28f, 0.92f);
+            (scramble > 0.01f ? 0.58f
+                : (coherence_ >= 0.90f ? 0.12f
+                   : (coherence_ >= 0.95f ? 0.28f : 0.38f)))
+            + (1.0f - coherence_) * 0.22f + scramble * 0.22f, 0.10f, 0.92f);
 
         const float xfade_eff = (transient_strength_ > 0.3f && scramble <= 0.05f)
             ? xfade * 0.65f : xfade;
