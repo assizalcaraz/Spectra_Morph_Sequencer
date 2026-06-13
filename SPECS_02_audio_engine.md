@@ -2,6 +2,13 @@
 
 ## 1. Arquitectura general
 
+### Modos (Etapa 2 — SPECS_13)
+
+| Modo | Entrada al ring buffer | Simulación |
+|------|------------------------|------------|
+| Live Insert | Bus de audio del host | Opcional (gravity+motion+…) |
+| File Granular | `FileSourceManager` + segmento | Desactivada |
+
 4 threads asíncronos desacoplados mediante buffers lock-free y snapshots inmutables:
 
 ```

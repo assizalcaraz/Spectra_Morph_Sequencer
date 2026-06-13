@@ -16,6 +16,12 @@ constexpr uint32_t RING_BUFFER_SIZE      = 8192;
 constexpr uint32_t FFT_MAX_SIZE          = 8192;
 constexpr float    LOG_OCTAVES           = 10.0f;
 
+// ── Plugin processing mode (SPECS_13) ───────────────────────────────
+enum class ProcessMode : uint8_t {
+    LiveInsert   = 0,
+    FileGranular = 1
+};
+
 // ── Lifecycle states ─────────────────────────────────────────────────
 enum class ParticleState : uint8_t {
     Alive,

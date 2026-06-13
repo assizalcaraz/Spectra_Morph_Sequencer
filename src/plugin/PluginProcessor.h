@@ -17,28 +17,36 @@
 #include "../dsp/tracking/PartialTracker.h"
 #include "../dsp/resynthesis/Resynthesizer.h"
 #include "../dsp/phase/PhaseManager.h"
+#include "../dsp/scramble/SpectralFrameStore.h"
+#include "../dsp/scramble/TemporalScrambler.h"
 #include "../simulation/ParticleSimulator.h"
+#include "FileSourceManager.h"
 
 #include <atomic>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <array>
+#include <vector>
 
-// ─── Parameter IDs ───────────────────────────────────────────────────
 namespace ParamID {
-    inline constexpr const char* CoherenceChaos  = "coherence_chaos";
-    inline constexpr const char* Density         = "density";
-    inline constexpr const char* TonalResidual   = "tonal_residual";
-    inline constexpr const char* Gravity         = "gravity";
-    inline constexpr const char* Motion          = "motion";
-    inline constexpr const char* Decay           = "decay";
-    inline constexpr const char* Spread          = "spread";
-    inline constexpr const char* DryWet          = "dry_wet";
-    inline constexpr const char* MaxPartials     = "max_partials";
-    inline constexpr const char* BirthThreshold  = "birth_threshold";
-    inline constexpr const char* PhaseMode       = "phase_mode";
-    inline constexpr const char* QualityMode     = "quality_mode";
+    inline constexpr const char* ProcessMode       = "process_mode";
+    inline constexpr const char* CoherenceChaos    = "coherence_chaos";
+    inline constexpr const char* Density           = "density";
+    inline constexpr const char* TonalResidual       = "tonal_residual";
+    inline constexpr const char* Gravity             = "gravity";
+    inline constexpr const char* Motion              = "motion";
+    inline constexpr const char* Decay               = "decay";
+    inline constexpr const char* Spread              = "spread";
+    inline constexpr const char* DryWet              = "dry_wet";
+    inline constexpr const char* MaxPartials         = "max_partials";
+    inline constexpr const char* BirthThreshold      = "birth_threshold";
+    inline constexpr const char* SegmentStart        = "segment_start";
+    inline constexpr const char* SegmentEnd          = "segment_end";
+    inline constexpr const char* TemporalFragmentMs  = "temporal_fragment_ms";
+    inline constexpr const char* BinScatter          = "bin_scatter";
+    inline constexpr const char* RandomSeed          = "random_seed";
+    inline constexpr const char* SpectralQuality     = "spectral_quality";
+    inline constexpr const char* ExportNormalize     = "export_normalize";
 }
 
 class SpectraMorphAudioProcessor final : public juce::AudioProcessor {
@@ -68,8 +76,7 @@ public:
     void getStateInformation(juce::MemoryBlock&) override;
     void setStateInformation(const void*, int) override;
 
-    float getParam(std::atomic<float>& param) const { return param.load(); }
-    void  setParam(std::atomic<float>& param, float v) { param.store(v); }
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
 
     const ParticleSnapshot* read_snapshot() const { return snapshots_.read(); }
     bool read_visual(VisualState& vs) { return visual_queue_.read(vs); }
@@ -80,6 +87,23 @@ public:
     float telemetry_f0() const { return telemetry_f0_.load(); }
     float telemetry_flux() const { return telemetry_flux_.load(); }
     float telemetry_transient() const { return telemetry_transient_.load(); }
+    uint32_t telemetry_scramble_read() const {
+        return telemetry_scramble_read_.load();
+    }
+    uint32_t telemetry_frame_store() const {
+        return frame_store_.num_frames();
+    }
+
+    ProcessMode current_process_mode() const;
+    bool isFileGranularMode() const;
+
+    FileSourceManager& file_source() { return file_source_; }
+    const FileSourceManager& file_source() const { return file_source_; }
+
+    bool loadSourceFile(const juce::File& file, juce::String& error);
+    void setFilePlaying(bool play);
+    bool isFilePlaying() const { return file_playing_.load(); }
+    bool renderSegmentToFile(const juce::File& dest, juce::String& error);
 
 private:
     std::thread dsp_thread_;
@@ -92,6 +116,12 @@ private:
     void merge_sim_into_pool();
     void wait_for_sim_frame(uint32_t frame);
     TransientMode transient_mode_for_coherence(float coherence) const;
+
+    void applyFftConfig();
+    bool shouldRunSim() const;
+    void syncFileSegmentFromApvts();
+    uint32_t framesPerFragment() const;
+    uint64_t scrambleSeed() const;
 
     FFTProcessor      fft_;
     PartialTracker    tracker_;
@@ -106,6 +136,13 @@ private:
     AudioRingBuffer   input_ring_;
     AudioRingBuffer   output_ring_;
     VisualRingBuffer  visual_queue_;
+
+    SpectralFrameStore frame_store_;
+    FileSourceManager  file_source_;
+
+    std::vector<float> work_mag_;
+    std::vector<float> work_phase_;
+    std::vector<float> work_raw_phase_;
 
     Scheduler         scheduler_;
     uint32_t          frame_counter_ = 0;
@@ -126,6 +163,11 @@ private:
     std::atomic<float> telemetry_f0_{0.0f};
     std::atomic<float> telemetry_flux_{0.0f};
     std::atomic<float> telemetry_transient_{0.0f};
+    std::atomic<uint32_t> telemetry_scramble_read_{0};
+
+    std::atomic<bool> file_playing_{false};
+    std::atomic<bool> file_exporting_{false};
+    std::atomic<bool> non_realtime_render_{false};
 
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None>
         dry_delay_line_;
@@ -140,6 +182,13 @@ private:
     std::atomic<float> dry_wet_{0.5f};
     std::atomic<float> birth_threshold_{0.1f};
     std::atomic<float> max_partials_{0.5f};
+    std::atomic<float> segment_start_{0.0f};
+    std::atomic<float> segment_end_{1.0f};
+    std::atomic<float> temporal_fragment_ms_{80.0f};
+    std::atomic<float> bin_scatter_{0.0f};
+    std::atomic<float> random_seed_{42.0f};
+    std::atomic<float> spectral_quality_{0.0f};
+    std::atomic<float> export_normalize_{1.0f};
 
     juce::AudioProcessorValueTreeState apvts_;
 

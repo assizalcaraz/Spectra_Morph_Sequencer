@@ -25,6 +25,8 @@ tienen comportamiento, memoria e interacción — y cuyo sonido emerge de esa di
 El sistema no busca transparencia (análisis-resíntesis perfecta).
 Busca **viabilidad perceptual**: que el resultado suena a algo con identidad, aunque sea diferente del input.
 
+**Etapa 2 (SPECS_13)** añade modo Archivo/Granular: prioriza texturas espectrales ricas con control explícito de orden vs caos temporal, inspirado en el flujo de segmentación del proyecto Granular_Synth (SuperCollider).
+
 ---
 
 ## 2. Ontología del sistema

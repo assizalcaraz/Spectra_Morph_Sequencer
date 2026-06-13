@@ -290,6 +290,11 @@ Si el sistema está cerca del límite de partials:
 - Sin transientes.
 - Phase vocoder básico (SPECS_08 Fase 1).
 
+### Fase 2b — File Granular (Etapa 2)
+
+- FFT 4096 opcional; `SpectralFrameStore` + permutación temporal (SPECS_13).
+- Export WAV offline via `renderSegmentToFile`.
+
 ### Fase 2
 
 - Tonal subtraction → residual.

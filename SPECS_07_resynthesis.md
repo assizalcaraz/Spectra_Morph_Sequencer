@@ -397,6 +397,12 @@ Con H = 256 @ 48kHz: ~5.3ms + ~2.6ms = ~18.6ms total → dentro del límite.
 
 ## 11. Estrategia de implementación
 
+### Etapa 2 — File Granular
+
+- Máscara tonal gaussiana (±4 bins) en `ResidualSynth`.
+- FFT 4096 opcional en modo archivo.
+- `SpectralFrameStore` + `TemporalScrambler` para lectura permutada de frames.
+
 ### Fase 1 (MVP acústico)
 
 - Additive bank básico (sine osc, sin optimizar).

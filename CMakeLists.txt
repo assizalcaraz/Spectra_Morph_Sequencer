@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(SpectraMorph
-    VERSION 0.1.1
+    VERSION 0.2.0
     LANGUAGES CXX
     DESCRIPTION "Spectral Particle Instrument"
 )
 
-set(SM_BUILD_TAG "fidelity-daw-r5")
+set(SM_BUILD_TAG "granular-file-r6")
 
 find_package(Git QUIET)
 set(SM_GIT_SHA "nogit")
@@ -74,6 +74,8 @@ set(DSP_SOURCES
     src/dsp/resynthesis/Resynthesizer.h
     src/dsp/resynthesis/ResidualSynth.h
     src/dsp/debug/SpectralMetrics.h
+    src/dsp/scramble/SpectralFrameStore.h
+    src/dsp/scramble/TemporalScrambler.h
 )
 
 set(SIMULATION_SOURCES
@@ -85,6 +87,7 @@ set(PLUGIN_SOURCES
     src/plugin/PluginProcessor.cpp
     src/plugin/PluginEditor.h
     src/plugin/PluginEditor.cpp
+    src/plugin/FileSourceManager.h
 )
 
 set(UI_SOURCES
@@ -133,6 +136,7 @@ target_link_libraries(SpectraMorph
         juce::juce_dsp
         juce::juce_audio_utils
         juce::juce_audio_devices
+        juce::juce_audio_formats
 )
 
 target_include_directories(SpectraMorph
@@ -149,6 +153,8 @@ add_executable(SpectraMorph_tests
     tests/test_resynthesis.cpp
     tests/test_phase2_validation.cpp
     tests/test_fidelity.cpp
+    tests/test_scramble.cpp
+    tests/test_file_segment.cpp
 )
 
 target_include_directories(SpectraMorph_tests

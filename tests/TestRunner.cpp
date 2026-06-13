@@ -44,6 +44,13 @@ int main(int argc, char** argv) {
     test_harmonic_affinity();
     test_gravity_pull();
 
+    extern void test_scrambler_identity();
+    extern void test_scrambler_chaos();
+    extern void test_file_segment_bounds();
+    test_scrambler_identity();
+    test_scrambler_chaos();
+    test_file_segment_bounds();
+
     printf("\nAll tests passed.\n");
     return 0;
 }

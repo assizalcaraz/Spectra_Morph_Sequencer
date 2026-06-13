@@ -35,7 +35,9 @@ Este spec define:
 
 ## 2. Macro-controls (MVP)
 
-El panel principal tiene exactamente **8 controles**.
+El panel Live Insert tiene **8 controles** principales.
+
+En **File Granular** (SPECS_13) se añaden: segmento, fragment ms, bin scatter, seed, calidad FFT, transporte Load/Play/Export (excepción documentada al panel extendido).
 
 ### 2.1 Coherence ↔ Chaos
 

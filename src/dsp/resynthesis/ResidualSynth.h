@@ -31,14 +31,14 @@ public:
             if (p.amplitude < 1e-8f) continue;
 
             const float bin_pos = p.frequency / bin_hz;
-            const uint32_t bin = static_cast<uint32_t>(bin_pos);
-            if (bin >= half_n_) continue;
-
-            tonal_mag_[bin] += p.amplitude;
-            if (bin > 0)
-                tonal_mag_[bin - 1] += p.amplitude * 0.25f;
-            if (bin + 1 < half_n_)
-                tonal_mag_[bin + 1] += p.amplitude * 0.25f;
+            const int center = static_cast<int>(bin_pos);
+            constexpr int radius = 4;
+            for (int d = -radius; d <= radius; ++d) {
+                const int b = center + d;
+                if (b < 0 || static_cast<uint32_t>(b) >= half_n_) continue;
+                const float w = std::exp(-0.5f * static_cast<float>(d * d));
+                tonal_mag_[static_cast<uint32_t>(b)] += p.amplitude * w;
+            }
         }
     }
 
