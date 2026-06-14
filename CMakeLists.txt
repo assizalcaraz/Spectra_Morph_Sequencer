@@ -159,6 +159,7 @@ add_executable(SpectraMorph_tests
     tests/test_window_pattern.cpp
     tests/test_tempo_utils.cpp
     tests/test_pitch_spread.cpp
+    tests/test_file_granular_fidelity.cpp
 )
 
 target_include_directories(SpectraMorph_tests

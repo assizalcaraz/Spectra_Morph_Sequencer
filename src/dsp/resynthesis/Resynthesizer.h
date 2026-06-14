@@ -100,11 +100,19 @@ public:
                 sum_sq += output_buf_[i] * output_buf_[i];
             const float out_rms = std::sqrt(sum_sq / static_cast<float>(hop_size_));
             if (out_rms > 0.0001f) {
-                const float max_gain = (coherence_ >= 0.85f && scramble <= 0.01f)
-                    ? 3.0f : 2.0f;
-                const float g = std::clamp(input_rms / out_rms, 0.25f, max_gain);
-                for (uint32_t i = 0; i < hop_size_; ++i)
-                    output_buf_[i] *= g;
+                const float ratio = out_rms / input_rms;
+                float g = 1.0f;
+                if (coherence_ >= 0.85f && scramble <= 0.01f) {
+                    if (ratio < 0.82f || ratio > 1.18f)
+                        g = std::clamp(input_rms / out_rms, 0.55f, 1.85f);
+                } else {
+                    const float max_gain = 2.0f;
+                    g = std::clamp(input_rms / out_rms, 0.25f, max_gain);
+                }
+                if (std::abs(g - 1.0f) > 0.02f) {
+                    for (uint32_t i = 0; i < hop_size_; ++i)
+                        output_buf_[i] *= g;
+                }
             }
         }
 

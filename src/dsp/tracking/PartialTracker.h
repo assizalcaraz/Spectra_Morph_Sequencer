@@ -203,6 +203,18 @@ private:
             return;
         }
 
+        if (coherence_ >= 0.92f) {
+            p.frequency = peak.frequency;
+            p.amplitude = peak.magnitude;
+            p.phase     = peak.phase;
+            p.energy    = peak.magnitude * peak.magnitude;
+            p.coherence = 1.0f;
+            p.spectral_pos = std::log2(p.frequency / 20.0f);
+            p.harmonic_affinity = PeakUtils::compute_harmonic_affinity(
+                p.frequency, fundamental_f0_);
+            return;
+        }
+
         float expected = p.phase + two_pi * p.frequency * hop_size_ / sample_rate_;
         float delta = peak.phase - expected;
         delta = std::fmod(delta + std::numbers::pi_v<float>,

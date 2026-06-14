@@ -63,9 +63,11 @@ int main(int argc, char** argv) {
     extern void test_window_pattern();
     extern void test_tempo_utils();
     extern void test_pitch_spread();
+    extern void test_file_granular_fidelity();
     test_window_pattern();
     test_tempo_utils();
     test_pitch_spread();
+    test_file_granular_fidelity();
 
     printf("\nAll tests passed.\n");
     return 0;

@@ -48,7 +48,7 @@ public:
                   const float* raw_phase, float coherence,
                   float transient_strength, uint64_t& phase_seed)
     {
-        const bool use_raw = transient_strength > 0.3f;
+        const bool use_raw = transient_strength > 0.3f && coherence < 0.85f;
 
         for (uint32_t k = 0; k < half_n_; ++k) {
             const float tonal_est = tonal_mag_[k] * kTonalSubtractAlpha;
@@ -58,7 +58,7 @@ public:
 
             if (use_raw && raw_phase != nullptr)
                 residual_phase_[k] = raw_phase[k];
-            else if (coherence > 0.75f)
+            else if (coherence > 0.70f)
                 residual_phase_[k] = input_phase[k];
             else {
                 phase_seed = phase_seed * 1103515245ull + 12345ull;
